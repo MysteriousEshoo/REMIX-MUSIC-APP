@@ -13,6 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius } from '../../theme';
 import { isValidEmail } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
+import { supabase } from '../../config/supabase';
+import { getAuthErrorMessage } from '../../utils/authErrors';
 
 interface ForgotPasswordScreenProps {
   navigation: any;
@@ -23,18 +25,32 @@ export const ForgotPasswordScreen: React.FC<ForgotPasswordScreenProps> = ({ navi
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
 
-  const handleResetPassword = () => {
+  const handleResetPassword = async () => {
+    // 1. Validation
     if (!email || !isValidEmail(email)) {
       haptics.error();
       Alert.alert('Error', 'Please enter a valid email');
       return;
     }
+
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+
+    // 2. Supabase password reset email bhejta hai
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: 'remix://reset-password',  // Deep link (optional)
+    });
+
+    setLoading(false);
+
+    if (error) {
+      // 3. Friendly error message
+      haptics.error();
+      Alert.alert('Error', getAuthErrorMessage(error));
+    } else {
+      // 4. Success — email bhej diya
       haptics.success();
       setSent(true);
-    }, 1500);
+    }
   };
 
   return (

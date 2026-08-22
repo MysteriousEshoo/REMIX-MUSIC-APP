@@ -29,6 +29,12 @@
     },
     "plugins": [
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9754ae70-1c67-474e-a0ed-6410f0c68e85"
+      }
+    },
+    "owner": "eshoo"
   }
 }

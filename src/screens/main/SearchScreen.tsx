@@ -12,8 +12,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { SearchBar, DJCard, MixCard } from '../../components';
-import { genres, mockDJs, mockMixes } from '../../data/mockData';
+import { genres, mockDJs, mockMixes, DJ, Mix } from '../../data/mockData';
 import { haptics } from '../../utils/haptics';
+import { supabase } from '../../config/supabase';
 
 const SEARCH_HISTORY_KEY = '@remix_search_history';
 const MAX_HISTORY = 8;
@@ -27,6 +28,8 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [resultOpacity] = useState(new Animated.Value(0));
+  const [dbSongs, setDbSongs] = useState<Mix[]>([]);
+  const [isSearchingDb, setIsSearchingDb] = useState(false);
 
   // Load search history from AsyncStorage
   useEffect(() => {
@@ -91,6 +94,67 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation }) => {
     saveToHistory(search);
   }, []);
 
+  // Database se search karo jab query change ho
+  useEffect(() => {
+    if (searchQuery.length > 1) {
+      searchFromDatabase(searchQuery);
+    }
+  }, [searchQuery]);
+
+  const searchFromDatabase = async (query: string) => {
+    setIsSearchingDb(true);
+    try {
+      // Songs table mein title, artist, genre search karo
+      const { data, error } = await supabase
+        .from('songs')
+        .select('*')
+        .or(`title.ilike.%${query}%,artist.ilike.%${query}%,genre.ilike.%${query}%`)
+        .limit(20);
+
+      if (error) {
+        console.error('Search error:', error);
+        // Fallback to mock data
+        setDbSongs([]);
+      } else if (data && data.length > 0) {
+        const formatted: Mix[] = data.map((song: any) => ({
+          id: song.id,
+          title: song.title,
+          artist: {
+            id: song.uploaded_by || 'unknown',
+            name: song.artist,
+            handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
+            avatar: 'https://picsum.photos/seed/' + song.artist + '/200/200',
+            bio: '',
+            followers: 0,
+            mixes: 0,
+            isVerified: false,
+            totalEarnings: 0,
+            genre: song.genre || 'Electronic',
+            isFollowing: false,
+          },
+          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
+          duration: song.duration || 0,
+          plays: song.plays_count || 0,
+          likes: 0,
+          isLiked: false,
+          isDownloaded: false,
+          genre: song.genre || 'Electronic',
+          uploadedAt: song.created_at,
+          isExclusive: false,
+        }));
+        setDbSongs(formatted);
+      } else {
+        setDbSongs([]);
+      }
+    } catch (err) {
+      console.error('Search failed:', err);
+      setDbSongs([]);
+    } finally {
+      setIsSearchingDb(false);
+    }
+  };
+
+  // Mock data se bhi filter karo (fallback + DJs ke liye)
   const filteredDJs = searchQuery
     ? mockDJs.filter(dj =>
         dj.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -98,13 +162,17 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation }) => {
       )
     : [];
 
-  const filteredMixes = searchQuery
-    ? mockMixes.filter(mix =>
-        mix.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        mix.artist.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        mix.genre.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : [];
+  // Database se aaye songs + mock songs dono dikhao
+  const filteredMixes = [
+    ...dbSongs,
+    ...mockMixes.filter(mix =>
+      mix.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      mix.artist.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      mix.genre.toLowerCase().includes(searchQuery.toLowerCase())
+    ),
+  ].filter((mix, index, self) => 
+    index === self.findIndex(m => m.id === mix.id)
+  );  // Duplicate remove karo
 
   const hasResults = filteredDJs.length > 0 || filteredMixes.length > 0;
 

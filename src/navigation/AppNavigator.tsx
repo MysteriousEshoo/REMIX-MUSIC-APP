@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform, ActivityIndicator } from 'react-native';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../theme';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
 
 // Screens
 import { SplashScreen } from '../screens/SplashScreen';
@@ -134,27 +135,41 @@ function AuthStackNavigator() {
   );
 }
 
-// ==================== APP NAVIGATOR ====================
-export const AppNavigator: React.FC = () => {
-  const [appState, setAppState] = useState<'splash' | 'onboarding' | 'auth' | 'main'>('splash');
+// ==================== INNER NAVIGATOR (auth state ke hisaab se screen dikhata hai) ====================
+const InnerNavigator: React.FC = () => {
+  const { session, loading } = useAuth();
 
-  if (appState === 'splash') {
-    return <SplashScreen onFinish={() => setAppState('onboarding')} />;
-  }
-
-  if (appState === 'onboarding') {
-    return <OnboardingScreen onFinish={() => setAppState('auth')} />;
+  // Loading — jab tak Supabase session check ho raha hai
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background }}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={{ color: Colors.textSecondary, marginTop: 16 }}>Loading...</Text>
+      </View>
+    );
   }
 
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {appState === 'auth' ? (
+        {/* Agar session hai (user login hai) → Main screen dikhao */}
+        {/* Agar session nahi hai → Auth screen dikhao */}
+        {session ? (
+          <Stack.Screen name="Main" component={MainStackNavigator} />
+        ) : (
           <Stack.Screen name="Auth" component={AuthStackNavigator} />
-        ) : null}
-        <Stack.Screen name="Main" component={MainStackNavigator} />
+        )}
       </Stack.Navigator>
     </NavigationContainer>
+  );
+};
+
+// ==================== APP NAVIGATOR (AuthProvider wrap karta hai) ====================
+export const AppNavigator: React.FC = () => {
+  return (
+    <AuthProvider>
+      <InnerNavigator />
+    </AuthProvider>
   );
 };
 

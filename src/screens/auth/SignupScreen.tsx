@@ -14,6 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius } from '../../theme';
 import { isValidEmail, isValidPassword } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
+import { useAuth } from '../../contexts/AuthContext';
+import { getAuthErrorMessage } from '../../utils/authErrors';
 
 interface SignupScreenProps {
   navigation: any;
@@ -27,8 +29,10 @@ export const SignupScreen: React.FC<SignupScreenProps> = ({ navigation }) => {
   const [role, setRole] = useState<'listener' | 'dj'>('listener');
   const [loading, setLoading] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const { signUp } = useAuth();
 
   const handleSignup = async () => {
+    // 1. Validation — saare fields bhare hain?
     if (!name || !email || !password) {
       haptics.error();
       Alert.alert('Error', 'Please fill in all fields');
@@ -49,12 +53,31 @@ export const SignupScreen: React.FC<SignupScreenProps> = ({ navigation }) => {
       Alert.alert('Error', 'Please agree to the Terms of Service');
       return;
     }
+
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+
+    // 2. Supabase signUp call — ye backend mein user banata hai
+    const { error } = await signUp(email, password, {
+      full_name: name,
+      role: role,   // 'listener' ya 'dj'
+    });
+
+    setLoading(false);
+
+    if (error) {
+      // 3. Friendly error message — user ko samajh aaye ki kya hua
+      haptics.error();
+      Alert.alert('Signup Failed', getAuthErrorMessage(error));
+    } else {
+      // 4. Success — user ban gaya!
       haptics.success();
-      navigation.replace('Main');
-    }, 1500);
+      Alert.alert(
+        'Account Created!',
+        'Please check your email to verify your account.'
+      );
+      // AuthContext automatically session update karega
+      // aur AppNavigator khud hi Main screen pe redirect kar dega
+    }
   };
 
   return (

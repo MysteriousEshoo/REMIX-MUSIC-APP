@@ -14,6 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius } from '../../theme';
 import { isValidEmail } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
+import { useAuth } from '../../contexts/AuthContext';
+import { getAuthErrorMessage } from '../../utils/authErrors';
 
 interface LoginScreenProps {
   navigation: any;
@@ -24,8 +26,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const { signIn } = useAuth();
 
   const handleLogin = async () => {
+    // 1. Validation
     if (!email || !password) {
       haptics.error();
       Alert.alert('Error', 'Please fill in all fields');
@@ -36,13 +40,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
       Alert.alert('Error', 'Please enter a valid email');
       return;
     }
+
     setLoading(true);
-    // Simulate API call
-    setTimeout(() => {
-      setLoading(false);
+
+    // 2. Supabase signIn call — email aur password verify karta hai
+    const { error } = await signIn(email, password);
+
+    setLoading(false);
+
+    if (error) {
+      // 3. Friendly error message — user ko samajh aaye ki kya hua
+      haptics.error();
+      Alert.alert('Login Failed', getAuthErrorMessage(error));
+    } else {
+      // 4. Success — session mil gaya!
       haptics.success();
-      navigation.replace('Main');
-    }, 1500);
+      // AuthContext automatically session update karega
+      // aur AppNavigator khud hi Main screen pe redirect kar dega
+    }
   };
 
   return (

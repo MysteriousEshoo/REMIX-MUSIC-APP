@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,9 +13,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { MixCard, DJCard, SkeletonMixCard, SkeletonHorizontalCard } from '../../components';
-import { mockMixes, mockDJs } from '../../data/mockData';
+import { mockMixes, mockDJs, Mix } from '../../data/mockData';
 import { getGreeting } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
+import { supabase } from '../../config/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 const { width } = Dimensions.get('window');
 
@@ -57,19 +59,96 @@ const AnimatedListItem: React.FC<{ children: React.ReactNode; index: number; del
 };
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
+  const { user } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedChip, setSelectedChip] = useState('All');
+  const [songs, setSongs] = useState<Mix[]>([]);
+  const [userName, setUserName] = useState('Music Lover');
+
+  // Songs Supabase se fetch karo
+  useEffect(() => {
+    fetchSongs();
+    fetchUserName();
+  }, []);
+
+  const fetchSongs = async () => {
+    try {
+      // Songs table se data nikalo
+      const { data, error } = await supabase
+        .from('songs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (error) {
+        console.error('Error fetching songs:', error);
+        // Agar table nahi hai ya error hai toh mock data use karo
+        setSongs(mockMixes);
+      } else if (data && data.length > 0) {
+        // Database se aaye songs ko Mix format mein convert karo
+        const formattedSongs: Mix[] = data.map((song: any) => ({
+          id: song.id,
+          title: song.title,
+          artist: {
+            id: song.uploaded_by || 'unknown',
+            name: song.artist,
+            handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
+            avatar: 'https://picsum.photos/seed/' + song.artist + '/200/200',
+            bio: '',
+            followers: 0,
+            mixes: 0,
+            isVerified: false,
+            totalEarnings: 0,
+            genre: song.genre || 'Electronic',
+            isFollowing: false,
+          },
+          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
+          duration: song.duration || 0,
+          plays: song.plays_count || 0,
+          likes: 0,
+          isLiked: false,
+          isDownloaded: false,
+          genre: song.genre || 'Electronic',
+          uploadedAt: song.created_at,
+          isExclusive: false,
+        }));
+        setSongs(formattedSongs);
+      } else {
+        // Table empty hai — mock data use karo
+        setSongs(mockMixes);
+      }
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      setSongs(mockMixes);
+    }
+  };
+
+  const fetchUserName = async () => {
+    if (!user) return;
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .single();
+      if (data?.full_name) {
+        setUserName(data.full_name);
+      }
+    } catch (err) {
+      // Use default name
+    }
+  };
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     haptics.light();
-    setTimeout(() => setRefreshing(false), 1200);
+    fetchSongs().then(() => setRefreshing(false));
   }, []);
 
-  const featuredMixes = mockMixes.filter(m => m.isExclusive);
-  const trendingMixes = mockMixes.slice(0, 6);
-  const newReleases = mockMixes.slice(4, 10);
+  const featuredMixes = songs.filter(m => m.isExclusive);
+  const trendingMixes = songs.slice(0, 6);
+  const newReleases = songs.slice(4, 10);
   const topDJs = mockDJs.slice(0, 5);
 
   const chips = ['All', 'Electronic', 'House', 'Techno', 'Deep House', 'Trance'];
@@ -91,7 +170,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>{getGreeting()}</Text>
-            <Text style={styles.username}>Music Lover 👋</Text>
+            <Text style={styles.username}>{userName} 👋</Text>
           </View>
           <TouchableOpacity
             style={styles.notifButton}

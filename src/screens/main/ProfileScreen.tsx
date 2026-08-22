@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,18 +6,72 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { CoinCard } from '../../components';
 import { haptics } from '../../utils/haptics';
+import { useAuth } from '../../contexts/AuthContext';
+import { supabase } from '../../config/supabase';
+
+// Profile data type — profiles table se aata hai
+interface UserProfile {
+  id: string;
+  username: string | null;
+  full_name: string | null;
+  avatar_url: string | null;
+  role: string;
+  created_at: string;
+}
 
 interface ProfileScreenProps {
   navigation: any;
 }
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
-  const isCreator = true;
+  const { user, signOut } = useAuth();
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Profile data Supabase se fetch karo
+  useEffect(() => {
+    fetchProfile();
+  }, [user]);
+
+  const fetchProfile = async () => {
+    if (!user) return;
+
+    try {
+      // Profiles table se user ka data nikalo
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (error) {
+        console.error('Error fetching profile:', error);
+        // Agar profile nahi mila toh auth data se banao
+        setProfile({
+          id: user.id,
+          username: null,
+          full_name: user.user_metadata?.full_name || 'User',
+          avatar_url: null,
+          role: user.user_metadata?.role || 'user',
+          created_at: user.created_at,
+        });
+      } else {
+        setProfile(data);
+      }
+    } catch (err) {
+      console.error('Unexpected error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isCreator = profile?.role === 'dj';
 
   const menuItems = [
     {
@@ -91,8 +145,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
               </View>
             )}
           </View>
-          <Text style={styles.profileName}>Music Lover</Text>
-          <Text style={styles.profileHandle}>@musiclover</Text>
+          <Text style={styles.profileName}>{profile?.full_name || 'User'}</Text>
+          <Text style={styles.profileHandle}>@{profile?.username || user?.email?.split('@')[0] || 'user'}</Text>
           
           {/* Stats */}
           <View style={styles.statsRow}>
@@ -116,8 +170,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
         {/* Coin Card */}
         <View style={styles.section}>
           <CoinCard
-            balance={12450}
-            totalEarned={45200}
+            balance={0}
+            totalEarned={0}
             onViewHistory={() => navigation.navigate('CreatorDashboard')}
           />
         </View>
@@ -189,7 +243,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
         {/* Logout */}
         <TouchableOpacity
           style={styles.logoutButton}
-          onPress={() => haptics.warning()}
+          onPress={async () => {
+            haptics.warning();
+            await signOut();
+            // signOut ke baad AuthContext session null kar dega
+            // aur AppNavigator automatically Login screen pe redirect kar dega
+          }}
         >
           <Ionicons name="log-out-outline" size={20} color={Colors.error} />
           <Text style={styles.logoutText}>Sign Out</Text>
