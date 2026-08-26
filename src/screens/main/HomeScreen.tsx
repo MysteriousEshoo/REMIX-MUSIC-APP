@@ -10,6 +10,7 @@ import {
   Animated,
   Dimensions,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { MixCard, DJCard, SkeletonMixCard, SkeletonHorizontalCard } from '../../components';
@@ -19,7 +20,7 @@ import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
-
+const MODE_STORAGE_KEY = '@remix_user_mode';
 const { width } = Dimensions.get('window');
 
 interface HomeScreenProps {
@@ -59,6 +60,16 @@ const AnimatedListItem: React.FC<{ children: React.ReactNode; index: number; del
   );
 };
 
+// Creator Stats type
+interface CreatorStats {
+  totalPlays: number;
+  totalLikes: number;
+  totalFollowers: number;
+  totalCoins: number;
+  totalMixes: number;
+  recentPlays: number;
+}
+
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const { user } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
@@ -67,59 +78,123 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const [songs, setSongs] = useState<Mix[]>([]);
   const [userName, setUserName] = useState('Music Lover');
   const [notificationCount, setNotificationCount] = useState(0);
+  const [isCreatorMode, setIsCreatorMode] = useState(false);
+  const [creatorStats, setCreatorStats] = useState<CreatorStats>({
+    totalPlays: 0,
+    totalLikes: 0,
+    totalFollowers: 0,
+    totalCoins: 0,
+    totalMixes: 0,
+    recentPlays: 0,
+  });
 
-  // Songs Supabase se fetch karo
+  // Mode load karo
   useEffect(() => {
-    setIsLoading(true);
-    Promise.all([fetchSongs(), fetchUserName(), fetchNotificationCount()]).then(() => {
-      setIsLoading(false);
-    });
+    loadMode();
   }, []);
 
-  // Jab genre chip change ho toh us genre ke songs fetch karo
-  useEffect(() => {
-    setIsLoading(true);
-    if (selectedChip === 'All') {
-      fetchSongs().then(() => setIsLoading(false));
-    } else {
-      fetchSongsByGenre(selectedChip).then(() => setIsLoading(false));
+  // Mode load from AsyncStorage
+  const loadMode = async () => {
+    try {
+      const savedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY);
+      setIsCreatorMode(savedMode === 'creator');
+    } catch (err) {
+      console.log('Error loading mode:', err);
     }
-  }, [selectedChip]);
+  };
 
-  // Jab screen wapas aaye (tab switch) toh songs refresh karo taaki like state updated rahe
+  // Jab screen focus ho toh mode aur data refresh karo
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      fetchSongs();
+      loadMode();
+      fetchAllData();
     });
     return unsubscribe;
   }, [navigation]);
 
+  // Initial load
+  useEffect(() => {
+    fetchAllData();
+  }, []);
+
+  // Sab data ek saath fetch karo
+  const fetchAllData = async () => {
+    setIsLoading(true);
+    await Promise.all([
+      fetchSongs(),
+      fetchUserName(),
+      fetchNotificationCount(),
+      fetchCreatorStats(),
+    ]);
+    setIsLoading(false);
+  };
+
+  // Creator stats fetch karo (real-time from Supabase)
+  const fetchCreatorStats = async () => {
+    if (!user) return;
+
+    try {
+      // User ki uploads count
+      const { count: mixCount } = await supabase
+        .from('songs')
+        .select('id', { count: 'exact', head: true })
+        .eq('uploaded_by', user.id);
+
+      // User ke total plays
+      const { data: songsData } = await supabase
+        .from('songs')
+        .select('plays_count')
+        .eq('uploaded_by', user.id);
+
+      const totalPlays = songsData?.reduce((sum, s) => sum + (s.plays_count || 0), 0) || 0;
+
+      // User ke total likes on his songs
+      const { data: likesData } = await supabase
+        .from('songs')
+        .select('likes_count')
+        .eq('uploaded_by', user.id);
+
+      const totalLikes = likesData?.reduce((sum, s) => sum + (s.likes_count || 0), 0) || 0;
+
+      // Followers count
+      const { count: followerCount } = await supabase
+        .from('user_follows')
+        .select('id', { count: 'exact', head: true })
+        .eq('dj_id', user.id);
+
+      // Recent plays (last 7 days simulation)
+      const recentPlays = Math.floor(totalPlays * 0.15);
+
+      setCreatorStats({
+        totalPlays,
+        totalLikes,
+        totalFollowers: followerCount || 0,
+        totalCoins: 0, // Abhi zero, baad mein coins table se
+        totalMixes: mixCount || 0,
+        recentPlays,
+      });
+    } catch (err) {
+      console.log('Error fetching creator stats:', err);
+    }
+  };
+
   // User ke liked song IDs fetch karo
   const fetchUserLikes = async (): Promise<Set<string>> => {
-    if (!user) {
-      console.log('[HomeScreen] fetchUserLikes: user nahi hai');
-      return new Set();
-    }
+    if (!user) return new Set();
     try {
       const { data, error } = await supabase
         .from('user_likes')
         .select('song_id')
         .eq('user_id', user.id);
 
-      if (error) {
-        console.log('[HomeScreen] fetchUserLikes error:', error.message);
-        return new Set();
-      }
-      if (!data) return new Set();
-      console.log('[HomeScreen] fetchUserLikes:', data.length, 'liked songs found');
+      if (error || !data) return new Set();
       return new Set(data.map((like: any) => like.song_id));
-    } catch (err) {
-      console.log('[HomeScreen] fetchUserLikes catch:', err);
+    } catch {
       return new Set();
     }
   };
 
-  // Songs Supabase se fetch karo (with per-user like status)
+  // Songs Supabase se fetch karo
   const fetchSongs = async () => {
     try {
       const [songsResult, likedIds] = await Promise.all([
@@ -163,7 +238,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           uploadedAt: song.created_at,
           isExclusive: song.is_exclusive || false,
         }));
-        console.log('[HomeScreen] fetchSongs:', formattedSongs.length, 'songs loaded');
         setSongs(formattedSongs);
       } else {
         setSongs(mockMixes);
@@ -228,70 +302,49 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     }
   };
 
-  // Like/Unlike handler — REAL Supabase insert/delete
+  // Like/Unlike handler
   const handleLikeFromHome = useCallback(async (songId: string) => {
-    if (!user) {
-      console.log('[HomeScreen] handleLikeFromHome: user nahi hai');
-      return;
-    }
+    if (!user) return;
     haptics.medium();
 
-    // Check karo current state
     const currentSong = songs.find(s => s.id === songId);
     const wasLiked = currentSong?.isLiked || false;
-    console.log('[HomeScreen] Like toggle:', songId, 'wasLiked:', wasLiked);
 
-    // Optimistic update — turant UI update karo
+    // Optimistic update
     setSongs(prev => prev.map(s =>
       s.id === songId ? { ...s, isLiked: !s.isLiked, likes: s.isLiked ? s.likes - 1 : s.likes + 1 } : s
     ));
 
     try {
       if (wasLiked) {
-        // UNLIKE
-        const { data: existing, error: findErr } = await supabase
+        const { data: existing } = await supabase
           .from('user_likes')
           .select('id')
           .eq('user_id', user.id)
           .eq('song_id', songId)
           .maybeSingle();
 
-        if (findErr) {
-          console.log('[HomeScreen] Find existing error:', findErr.message);
-        }
-
         if (existing) {
           const { error } = await supabase.from('user_likes').delete().eq('id', existing.id);
           if (error) {
-            console.log('[HomeScreen] ❌ DELETE error:', error.message);
-            // Revert
             setSongs(prev => prev.map(s =>
               s.id === songId ? { ...s, isLiked: true, likes: s.likes + 1 } : s
             ));
-          } else {
-            console.log('[HomeScreen] ✅ Unlike SUCCESS');
           }
         }
       } else {
-        // LIKE
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('user_likes')
           .insert({ user_id: user.id, song_id: songId })
           .select();
 
         if (error) {
-          console.log('[HomeScreen] ❌ INSERT error:', error.message, error.code, error.details);
-          // Revert optimistic update
           setSongs(prev => prev.map(s =>
             s.id === songId ? { ...s, isLiked: false, likes: s.likes - 1 } : s
           ));
-        } else {
-          console.log('[HomeScreen] ✅ Like SUCCESS:', data);
         }
       }
     } catch (err) {
-      console.log('[HomeScreen] ❌ Like CATCH error:', err);
-      // Revert
       setSongs(prev => prev.map(s =>
         s.id === songId ? { ...s, isLiked: !s.isLiked, likes: s.isLiked ? s.likes - 1 : s.likes + 1 } : s
       ));
@@ -314,7 +367,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     }
   };
 
-  // Notification count fetch karo
   const fetchNotificationCount = async () => {
     if (!user) return;
     try {
@@ -335,10 +387,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     haptics.light();
-    fetchSongs().then(() => {
-      fetchNotificationCount().then(() => setRefreshing(false));
-    });
+    fetchAllData().then(() => setRefreshing(false));
   }, []);
+
+  // Jab genre chip change ho
+  useEffect(() => {
+    setIsLoading(true);
+    if (selectedChip === 'All') {
+      fetchSongs().then(() => setIsLoading(false));
+    } else {
+      fetchSongsByGenre(selectedChip).then(() => setIsLoading(false));
+    }
+  }, [selectedChip]);
 
   const featuredMixes = songs.filter(m => m.isExclusive);
   const trendingMixes = songs.slice(0, 6);
@@ -346,6 +406,317 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const topDJs = mockDJs.slice(0, 5);
 
   const chips = ['All', 'Electronic', 'House', 'Techno', 'Deep House', 'Trance'];
+
+  // Format number helper
+  const formatNumber = (num: number): string => {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+  };
+
+  // ========== CREATOR MODE HOME ==========
+  const renderCreatorHome = () => (
+    <>
+      {/* Creator Stats Dashboard */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>📊 Your Stats Today</Text>
+        <View style={styles.statsGrid}>
+          <View style={styles.statCard}>
+            <Ionicons name="headset" size={24} color={Colors.primary} />
+            <Text style={styles.statValue}>{formatNumber(creatorStats.totalPlays)}</Text>
+            <Text style={styles.statLabel}>Total Plays</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Ionicons name="heart" size={24} color={Colors.error} />
+            <Text style={styles.statValue}>{formatNumber(creatorStats.totalLikes)}</Text>
+            <Text style={styles.statLabel}>Total Likes</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Ionicons name="people" size={24} color={Colors.info} />
+            <Text style={styles.statValue}>{formatNumber(creatorStats.totalFollowers)}</Text>
+            <Text style={styles.statLabel}>Followers</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Ionicons name="diamond" size={24} color={Colors.gold} />
+            <Text style={styles.statValue}>{formatNumber(creatorStats.totalCoins)}</Text>
+            <Text style={styles.statLabel}>Coins</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Quick Upload Button */}
+      <View style={styles.section}>
+        <TouchableOpacity
+          style={styles.uploadButton}
+          onPress={() => { haptics.light(); navigation.navigate('Upload'); }}
+        >
+          <Ionicons name="cloud-upload" size={24} color={Colors.white} />
+          <Text style={styles.uploadButtonText}>Upload New Mix</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Genre Chips */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.chipsContainer}
+        contentContainerStyle={styles.chipsContent}
+      >
+        {chips.map((chip) => (
+          <TouchableOpacity
+            key={chip}
+            style={[styles.chip, selectedChip === chip && styles.chipActive]}
+            onPress={() => { haptics.selection(); setSelectedChip(chip); }}
+          >
+            <Text style={[styles.chipText, selectedChip === chip && styles.chipTextActive]}>
+              {chip}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      {/* Trending in Your Genre */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>🔥 Trending in Your Genre</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Search', { filter: 'trending' })}>
+            <Text style={styles.seeAll}>See All</Text>
+          </TouchableOpacity>
+        </View>
+        <FlatList
+          horizontal
+          data={trendingMixes}
+          keyExtractor={item => item.id}
+          renderItem={({ item, index }) => (
+            <AnimatedListItem index={index} delay={100}>
+              <MixCard
+                mix={item}
+                onPress={() => navigation.navigate('Player', { mix: item })}
+                onPlay={() => navigation.navigate('Player', { mix: item })}
+                onLike={() => handleLikeFromHome(item.id)}
+              />
+            </AnimatedListItem>
+          )}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.horizontalList}
+        />
+      </View>
+
+      {/* Your Recent Uploads */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>📁 Your Recent Uploads</Text>
+          <TouchableOpacity>
+            <Text style={styles.seeAll}>Manage</Text>
+          </TouchableOpacity>
+        </View>
+        {songs.filter(s => s.artist.id === user?.id).slice(0, 3).length > 0 ? (
+          songs.filter(s => s.artist.id === user?.id).slice(0, 3).map((mix, index) => (
+            <AnimatedListItem key={mix.id} index={index} delay={300}>
+              <MixCard
+                variant="horizontal"
+                mix={mix}
+                onPress={() => navigation.navigate('Player', { mix })}
+                onPlay={() => navigation.navigate('Player', { mix })}
+              />
+            </AnimatedListItem>
+          ))
+        ) : (
+          <View style={styles.emptySection}>
+            <Text style={styles.emptyText}>No uploads yet. Start sharing your mixes!</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Earnings Summary */}
+      <View style={styles.section}>
+        <View style={styles.earningsCard}>
+          <View style={styles.earningsHeader}>
+            <Ionicons name="diamond" size={24} color={Colors.gold} />
+            <Text style={styles.earningsTitle}>Earnings Summary</Text>
+          </View>
+          <View style={styles.earningsRow}>
+            <View style={styles.earningsItem}>
+              <Text style={styles.earningsValue}>{formatNumber(creatorStats.totalCoins)}</Text>
+              <Text style={styles.earningsLabel}>Total Coins</Text>
+            </View>
+            <View style={styles.earningsDivider} />
+            <View style={styles.earningsItem}>
+              <Text style={styles.earningsValue}>$0</Text>
+              <Text style={styles.earningsLabel}>Withdrawn</Text>
+            </View>
+            <View style={styles.earningsDivider} />
+            <View style={styles.earningsItem}>
+              <Text style={styles.earningsValue}>$0</Text>
+              <Text style={styles.earningsLabel}>Pending</Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.withdrawButton}
+            onPress={() => navigation.navigate('CreatorDashboard')}
+          >
+            <Text style={styles.withdrawButtonText}>View Dashboard</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </>
+  );
+
+  // ========== LISTENER MODE HOME ==========
+  const renderListenerHome = () => (
+    <>
+      {/* Genre Chips */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.chipsContainer}
+        contentContainerStyle={styles.chipsContent}
+      >
+        {chips.map((chip) => (
+          <TouchableOpacity
+            key={chip}
+            style={[styles.chip, selectedChip === chip && styles.chipActive]}
+            onPress={() => { haptics.selection(); setSelectedChip(chip); }}
+          >
+            <Text style={[styles.chipText, selectedChip === chip && styles.chipTextActive]}>
+              {chip}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      {/* Featured Section */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>🔥 Featured</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Search', { filter: 'featured' })}>
+            <Text style={styles.seeAll}>See All</Text>
+          </TouchableOpacity>
+        </View>
+        {featuredMixes.length > 0 ? (
+          <FlatList
+            horizontal
+            data={featuredMixes}
+            keyExtractor={item => item.id}
+            renderItem={({ item, index }) => (
+              <AnimatedListItem index={index} delay={100}>
+                <MixCard
+                  variant="featured"
+                  mix={item}
+                  onPress={() => navigation.navigate('Player', { mix: item })}
+                  onPlay={() => navigation.navigate('Player', { mix: item })}
+                />
+              </AnimatedListItem>
+            )}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.featuredList}
+          />
+        ) : (
+          <View style={styles.emptySection}>
+            <Text style={styles.emptyText}>No featured mixes yet</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Trending Now */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>📈 Trending Now</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Search', { filter: 'trending' })}>
+            <Text style={styles.seeAll}>See All</Text>
+          </TouchableOpacity>
+        </View>
+        <FlatList
+          horizontal
+          data={trendingMixes}
+          keyExtractor={item => item.id}
+          renderItem={({ item, index }) => (
+            <AnimatedListItem index={index} delay={200}>
+              <MixCard
+                mix={item}
+                onPress={() => navigation.navigate('Player', { mix: item })}
+                onPlay={() => navigation.navigate('Player', { mix: item })}
+                onLike={() => handleLikeFromHome(item.id)}
+              />
+            </AnimatedListItem>
+          )}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.horizontalList}
+        />
+      </View>
+
+      {/* New Releases */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>✨ New Releases</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Search', { filter: 'new' })}>
+            <Text style={styles.seeAll}>See All</Text>
+          </TouchableOpacity>
+        </View>
+        {newReleases.slice(0, 4).map((mix, index) => (
+          <AnimatedListItem key={mix.id} index={index} delay={400}>
+            <MixCard
+              variant="horizontal"
+              mix={mix}
+              onPress={() => navigation.navigate('Player', { mix })}
+              onPlay={() => navigation.navigate('Player', { mix })}
+            />
+          </AnimatedListItem>
+        ))}
+      </View>
+
+      {/* Because You Liked... */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>🎧 Because You Liked...</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Search', { filter: 'recommended' })}>
+            <Text style={styles.seeAll}>See All</Text>
+          </TouchableOpacity>
+        </View>
+        <FlatList
+          horizontal
+          data={[...trendingMixes].reverse()}
+          keyExtractor={item => `rec-${item.id}`}
+          renderItem={({ item, index }) => (
+            <AnimatedListItem index={index} delay={500}>
+              <MixCard
+                variant="compact"
+                mix={item}
+                onPress={() => navigation.navigate('Player', { mix: item })}
+              />
+            </AnimatedListItem>
+          )}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.horizontalList}
+        />
+      </View>
+
+      {/* Top DJs */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>⭐ Top DJs</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Search', { filter: 'djs' })}>
+            <Text style={styles.seeAll}>See All</Text>
+          </TouchableOpacity>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.horizontalList}
+        >
+          {topDJs.map((dj, index) => (
+            <AnimatedListItem key={dj.id} index={index} delay={300}>
+              <DJCard
+                dj={dj}
+                variant="compact"
+                onPress={() => navigation.navigate('DJProfile', { dj })}
+              />
+            </AnimatedListItem>
+          ))}
+        </ScrollView>
+      </View>
+    </>
+  );
 
   return (
     <View style={styles.container}>
@@ -364,7 +735,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>{getGreeting()}</Text>
-            <Text style={styles.username}>{userName} 👋</Text>
+            <Text style={styles.username}>
+              {userName} {isCreatorMode ? '🎤' : '👋'}
+            </Text>
           </View>
           <TouchableOpacity
             style={styles.notifButton}
@@ -385,25 +758,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Quick Access Chips */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.chipsContainer}
-          contentContainerStyle={styles.chipsContent}
-        >
-          {chips.map((chip) => (
-            <TouchableOpacity
-              key={chip}
-              style={[styles.chip, selectedChip === chip && styles.chipActive]}
-              onPress={() => { haptics.selection(); setSelectedChip(chip); }}
-            >
-              <Text style={[styles.chipText, selectedChip === chip && styles.chipTextActive]}>
-                {chip}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        {/* Mode Badge */}
+        <View style={styles.modeBadgeContainer}>
+          <View style={[styles.modeBadge, { backgroundColor: isCreatorMode ? Colors.primary + '20' : Colors.info + '20' }]}>
+            <Ionicons
+              name={isCreatorMode ? 'mic' : 'headset'}
+              size={14}
+              color={isCreatorMode ? Colors.primary : Colors.info}
+            />
+            <Text style={[styles.modeBadgeText, { color: isCreatorMode ? Colors.primary : Colors.info }]}>
+              {isCreatorMode ? 'Creator Mode' : 'Listener Mode'}
+            </Text>
+          </View>
+        </View>
 
         {isLoading ? (
           <>
@@ -417,153 +784,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             </View>
           </>
         ) : (
-          <>
-            {/* Featured Section */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>🔥 Featured</Text>
-                <TouchableOpacity onPress={() => {
-                  haptics.selection();
-                  navigation.navigate('Search', { filter: 'featured' });
-                }}>
-                  <Text style={styles.seeAll}>See All</Text>
-                </TouchableOpacity>
-              </View>
-              {featuredMixes.length > 0 ? (
-                <FlatList
-                  horizontal
-                  data={featuredMixes}
-                  keyExtractor={item => item.id}
-                  renderItem={({ item, index }) => (
-                    <AnimatedListItem index={index} delay={100}>
-                      <MixCard
-                        variant="featured"
-                        mix={item}
-                        onPress={() => navigation.navigate('Player', { mix: item })}
-                        onPlay={() => navigation.navigate('Player', { mix: item })}
-                      />
-                    </AnimatedListItem>
-                  )}
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.featuredList}
-                />
-              ) : (
-                <View style={styles.emptySection}>
-                  <Text style={styles.emptyText}>No featured mixes yet</Text>
-                </View>
-              )}
-            </View>
-
-            {/* Trending Section */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>📈 Trending Now</Text>
-                <TouchableOpacity onPress={() => {
-                  haptics.selection();
-                  navigation.navigate('Search', { filter: 'trending' });
-                }}>
-                  <Text style={styles.seeAll}>See All</Text>
-                </TouchableOpacity>
-              </View>
-              <FlatList
-                horizontal
-                data={trendingMixes}
-                keyExtractor={item => item.id}
-                renderItem={({ item, index }) => (
-                  <AnimatedListItem index={index} delay={200}>
-                    <MixCard
-                      mix={item}
-                      onPress={() => navigation.navigate('Player', { mix: item })}
-                      onPlay={() => navigation.navigate('Player', { mix: item })}
-                      onLike={() => handleLikeFromHome(item.id)}
-                    />
-                  </AnimatedListItem>
-                )}
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.horizontalList}
-              />
-            </View>
-
-            {/* Top DJs */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>⭐ Top DJs</Text>
-                <TouchableOpacity onPress={() => {
-                  haptics.selection();
-                  navigation.navigate('Search', { filter: 'djs' });
-                }}>
-                  <Text style={styles.seeAll}>See All</Text>
-                </TouchableOpacity>
-              </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.horizontalList}
-              >
-                {topDJs.map((dj, index) => (
-                  <AnimatedListItem key={dj.id} index={index} delay={300}>
-                    <DJCard
-                      dj={dj}
-                      variant="compact"
-                      onPress={() => navigation.navigate('DJProfile', { dj })}
-                    />
-                  </AnimatedListItem>
-                ))}
-              </ScrollView>
-            </View>
-
-            {/* New Releases */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>✨ New Releases</Text>
-                <TouchableOpacity onPress={() => {
-                  haptics.selection();
-                  navigation.navigate('Search', { filter: 'new' });
-                }}>
-                  <Text style={styles.seeAll}>See All</Text>
-                </TouchableOpacity>
-              </View>
-              {newReleases.slice(0, 4).map((mix, index) => (
-                <AnimatedListItem key={mix.id} index={index} delay={400}>
-                  <MixCard
-                    variant="horizontal"
-                    mix={mix}
-                    onPress={() => navigation.navigate('Player', { mix })}
-                    onPlay={() => navigation.navigate('Player', { mix })}
-                  />
-                </AnimatedListItem>
-              ))}
-            </View>
-
-            {/* Recommended for You */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>🎧 For You</Text>
-                <TouchableOpacity onPress={() => {
-                  haptics.selection();
-                  navigation.navigate('Search', { filter: 'recommended' });
-                }}>
-                  <Text style={styles.seeAll}>See All</Text>
-                </TouchableOpacity>
-              </View>
-              <FlatList
-                horizontal
-                data={[...trendingMixes].reverse()}
-                keyExtractor={item => `rec-${item.id}`}
-                renderItem={({ item, index }) => (
-                  <AnimatedListItem index={index} delay={500}>
-                    <MixCard
-                      variant="compact"
-                      mix={item}
-                      onPress={() => navigation.navigate('Player', { mix: item })}
-                    />
-                  </AnimatedListItem>
-                )}
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.horizontalList}
-              />
-            </View>
-          </>
+          isCreatorMode ? renderCreatorHome() : renderListenerHome()
         )}
 
         <View style={{ height: 120 }} />
@@ -618,6 +839,25 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.white,
   },
+  // Mode Badge
+  modeBadgeContainer: {
+    paddingHorizontal: Spacing.xl,
+    marginBottom: Spacing.lg,
+  },
+  modeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.full,
+    gap: Spacing.xs,
+  },
+  modeBadgeText: {
+    ...Typography.bodySmall,
+    fontWeight: '600',
+  },
+  // Chips
   chipsContainer: {
     marginBottom: Spacing.lg,
   },
@@ -674,5 +914,92 @@ const styles = StyleSheet.create({
   emptyText: {
     ...Typography.body,
     color: Colors.textTertiary,
+  },
+  // Creator Stats Grid
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  statCard: {
+    width: (Layout.screenWidth - Spacing.xl * 2 - Spacing.sm) / 2,
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+    alignItems: 'center',
+  },
+  statValue: {
+    ...Typography.h2,
+    marginTop: Spacing.sm,
+  },
+  statLabel: {
+    ...Typography.bodySmall,
+    color: Colors.textSecondary,
+    marginTop: Spacing.xs,
+  },
+  // Upload Button
+  uploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    marginHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    gap: Spacing.sm,
+  },
+  uploadButtonText: {
+    ...Typography.button,
+    color: Colors.white,
+  },
+  // Earnings Card
+  earningsCard: {
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.lg,
+    marginHorizontal: Spacing.xl,
+    padding: Spacing.xl,
+  },
+  earningsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  earningsTitle: {
+    ...Typography.h3,
+  },
+  earningsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.lg,
+  },
+  earningsItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  earningsValue: {
+    ...Typography.h3,
+    color: Colors.gold,
+  },
+  earningsLabel: {
+    ...Typography.bodySmall,
+    color: Colors.textSecondary,
+    marginTop: Spacing.xs,
+  },
+  earningsDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: Colors.border,
+  },
+  withdrawButton: {
+    backgroundColor: Colors.gold + '20',
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    alignItems: 'center',
+  },
+  withdrawButtonText: {
+    ...Typography.button,
+    color: Colors.gold,
   },
 });
