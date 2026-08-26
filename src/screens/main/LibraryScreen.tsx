@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,23 +12,142 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { MixCard } from '../../components';
-import { mockMixes, mockPlaylists } from '../../data/mockData';
+import { mockMixes, mockPlaylists, Mix } from '../../data/mockData';
 import { haptics } from '../../utils/haptics';
+import { supabase } from '../../config/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface LibraryScreenProps {
   navigation: any;
+  route?: any;
 }
 
 type LibraryTab = 'liked' | 'playlists' | 'downloads';
 
-export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation }) => {
+export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route }) => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<LibraryTab>('liked');
   const [refreshing, setRefreshing] = useState(false);
-  const tabAnim = useRef(new Animated.Value(0)).current;
   const contentFade = useRef(new Animated.Value(1)).current;
 
-  const likedMixes = mockMixes.filter(m => m.isLiked);
+  // Liked songs state
+  const [likedMixes, setLikedMixes] = useState<Mix[]>([]);
+  const [isLoadingLiked, setIsLoadingLiked] = useState(true);
+
+  // Downloads state (abhi mock)
   const downloadedMixes = mockMixes.filter(m => m.isDownloaded);
+
+  // Jab screen focus ho toh liked songs refresh karo — HAR BAR
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      console.log('[LibraryScreen] Screen focused — fetching liked songs');
+      fetchLikedSongs();
+    });
+    return unsubscribe;
+  }, [navigation, user]);
+
+  // Initial load
+  useEffect(() => {
+    fetchLikedSongs();
+  }, []);
+
+  // Liked songs Supabase se fetch karo
+  const fetchLikedSongs = async () => {
+    console.log('[LibraryScreen] fetchLikedSongs called, user:', user?.id || 'null');
+    setIsLoadingLiked(true);
+
+    try {
+      if (!user) {
+        console.log('[LibraryScreen] User nahi hai — empty state');
+        setLikedMixes([]);
+        setIsLoadingLiked(false);
+        return;
+      }
+
+      // Step 1: user_likes table se liked song IDs nikalo
+      const { data: likesData, error: likesError } = await supabase
+        .from('user_likes')
+        .select('song_id')
+        .eq('user_id', user.id);
+
+      console.log('[LibraryScreen] user_likes query result:', {
+        error: likesError?.message,
+        count: likesData?.length,
+        data: likesData,
+      });
+
+      if (likesError) {
+        console.log('[LibraryScreen] ❌ user_likes error:', likesError.message, likesError.code);
+        setLikedMixes([]);
+        setIsLoadingLiked(false);
+        return;
+      }
+
+      if (!likesData || likesData.length === 0) {
+        console.log('[LibraryScreen] No liked songs in DB — showing empty');
+        setLikedMixes([]);
+        setIsLoadingLiked(false);
+        return;
+      }
+
+      // Step 2: Song IDs nikalo
+      const songIds = likesData.map((like: any) => like.song_id);
+      console.log('[LibraryScreen] Liked song IDs:', songIds);
+
+      // Step 3: Songs ka data fetch karo
+      const { data: songsData, error: songsError } = await supabase
+        .from('songs')
+        .select('*')
+        .in('id', songIds);
+
+      console.log('[LibraryScreen] songs query result:', {
+        error: songsError?.message,
+        count: songsData?.length,
+      });
+
+      if (songsError) {
+        console.log('[LibraryScreen] ❌ songs error:', songsError.message, songsError.code);
+        setLikedMixes([]);
+      } else if (!songsData || songsData.length === 0) {
+        console.log('[LibraryScreen] Songs table se data nahi mila for IDs:', songIds);
+        setLikedMixes([]);
+      } else {
+        const formatted: Mix[] = songsData.map((song: any) => ({
+          id: song.id,
+          title: song.title,
+          artist: {
+            id: song.uploaded_by || 'unknown',
+            name: song.artist,
+            handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
+            avatar: 'https://picsum.photos/seed/' + song.artist + '/200/200',
+            bio: '',
+            followers: 0,
+            mixes: 0,
+            isVerified: false,
+            totalEarnings: 0,
+            genre: song.genre || 'Electronic',
+            isFollowing: false,
+          },
+          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
+          duration: song.duration || 0,
+          plays: song.plays_count || 0,
+          likes: song.likes_count || 0,
+          isLiked: true,
+          isDownloaded: song.is_downloaded || false,
+          genre: song.genre || 'Electronic',
+          uploadedAt: song.created_at,
+          isExclusive: song.is_exclusive || false,
+        }));
+        console.log('[LibraryScreen] ✅ Liked songs loaded:', formatted.length, 'songs');
+        setLikedMixes(formatted);
+      }
+    } catch (err) {
+      console.log('[LibraryScreen] ❌ fetchLikedSongs CATCH:', err);
+      setLikedMixes([]);
+    } finally {
+      setIsLoadingLiked(false);
+    }
+  };
 
   const tabs: { key: LibraryTab; label: string; icon: string; count: number }[] = [
     { key: 'liked', label: 'Liked', icon: 'heart', count: likedMixes.length },
@@ -38,7 +157,6 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation }) => {
 
   const switchTab = useCallback((tab: LibraryTab) => {
     haptics.selection();
-    // Fade out, switch, fade in
     Animated.timing(contentFade, {
       toValue: 0,
       duration: 100,
@@ -56,7 +174,7 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation }) => {
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     haptics.light();
-    setTimeout(() => setRefreshing(false), 1200);
+    fetchLikedSongs().then(() => setRefreshing(false));
   }, []);
 
   return (
@@ -124,7 +242,12 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation }) => {
                 </TouchableOpacity>
               </View>
 
-              {likedMixes.length > 0 ? (
+              {isLoadingLiked ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="heart-outline" size={48} color={Colors.textTertiary} />
+                  <Text style={styles.emptyTitle}>Loading liked songs...</Text>
+                </View>
+              ) : likedMixes.length > 0 ? (
                 likedMixes.map((mix) => (
                   <MixCard
                     key={mix.id}
@@ -243,24 +366,24 @@ const styles = StyleSheet.create({
   },
   tabsContainer: {
     flexDirection: 'row',
-    paddingHorizontal: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.lg,
-    gap: Spacing.sm,
+    gap: Spacing.xs,
   },
   tab: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Colors.backgroundHighlight,
     borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
-    gap: Spacing.xs,
+    gap: 4,
   },
   tabActive: {
     backgroundColor: Colors.primary,
   },
   tabText: {
-    ...Typography.bodySmall,
+    ...Typography.caption,
     color: Colors.textSecondary,
     fontWeight: '600',
   },
@@ -270,17 +393,17 @@ const styles = StyleSheet.create({
   tabBadge: {
     backgroundColor: Colors.surfaceLight,
     borderRadius: BorderRadius.full,
-    minWidth: 20,
-    height: 20,
+    minWidth: 18,
+    height: 18,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
   },
   tabBadgeActive: {
     backgroundColor: Colors.white + '30',
   },
   tabBadgeText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
     color: Colors.textSecondary,
   },

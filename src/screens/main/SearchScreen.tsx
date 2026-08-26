@@ -15,15 +15,18 @@ import { SearchBar, DJCard, MixCard } from '../../components';
 import { genres, mockDJs, mockMixes, DJ, Mix } from '../../data/mockData';
 import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 const SEARCH_HISTORY_KEY = '@remix_search_history';
 const MAX_HISTORY = 8;
 
 interface SearchScreenProps {
   navigation: any;
+  route?: any;
 }
 
-export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation }) => {
+export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation, route }) => {
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -35,6 +38,20 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation }) => {
   useEffect(() => {
     loadSearchHistory();
   }, []);
+
+  // Agar HomeScreen se filter aaya ho toh apply karo
+  useEffect(() => {
+    if (route?.params?.filter) {
+      const filter = route.params.filter;
+      if (filter === 'djs') {
+        // DJs tab dikhao — search bar mein kuch nahi dalna
+        setSearchQuery('');
+      } else {
+        // Genre/section filter apply karo
+        setSearchQuery(filter.charAt(0).toUpperCase() + filter.slice(1));
+      }
+    }
+  }, [route?.params?.filter]);
 
   // Animate results in
   useEffect(() => {
@@ -104,16 +121,24 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation }) => {
   const searchFromDatabase = async (query: string) => {
     setIsSearchingDb(true);
     try {
-      // Songs table mein title, artist, genre search karo
-      const { data, error } = await supabase
-        .from('songs')
-        .select('*')
-        .or(`title.ilike.%${query}%,artist.ilike.%${query}%,genre.ilike.%${query}%`)
-        .limit(20);
+      // Songs table mein title, artist, genre search karo + user likes parallel mein
+      const [songsResult, likesResult] = await Promise.all([
+        supabase
+          .from('songs')
+          .select('*')
+          .or(`title.ilike.%${query}%,artist.ilike.%${query}%,genre.ilike.%${query}%`)
+          .limit(20),
+        user ? supabase
+          .from('user_likes')
+          .select('song_id')
+          .eq('user_id', user.id) : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      const { data, error } = songsResult;
+      const likedIds = new Set((likesResult.data || []).map((l: any) => l.song_id));
 
       if (error) {
         console.error('Search error:', error);
-        // Fallback to mock data
         setDbSongs([]);
       } else if (data && data.length > 0) {
         const formatted: Mix[] = data.map((song: any) => ({
@@ -135,12 +160,12 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation }) => {
           coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
           duration: song.duration || 0,
           plays: song.plays_count || 0,
-          likes: 0,
-          isLiked: false,
-          isDownloaded: false,
+          likes: song.likes_count || 0,
+          isLiked: likedIds.has(song.id),
+          isDownloaded: song.is_downloaded || false,
           genre: song.genre || 'Electronic',
           uploadedAt: song.created_at,
-          isExclusive: false,
+          isExclusive: song.is_exclusive || false,
         }));
         setDbSongs(formatted);
       } else {

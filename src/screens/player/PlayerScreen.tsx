@@ -14,6 +14,7 @@ import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { Mix } from '../../data/mockData';
 import { formatDuration } from '../../utils/helpers';
 import { useAudioPlayer } from '../../hooks/useAudioPlayer';
+import { useLikeSong } from '../../hooks/useLikeSong';
 import { haptics } from '../../utils/haptics';
 
 const { width, height } = Dimensions.get('window');
@@ -25,11 +26,11 @@ interface PlayerScreenProps {
 
 export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route }) => {
   const mix: Mix | undefined = route?.params?.mix;
-  const [isLiked, setIsLiked] = useState(mix?.isLiked || false);
   const [isShuffled, setIsShuffled] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>('off');
 
   const audio = useAudioPlayer();
+  const { isLiked, likeSong, statusChecked } = useLikeSong(mix?.id || '');
 
   // Vinyl rotation animation
   const vinylRotation = useRef(new Animated.Value(0)).current;
@@ -61,7 +62,6 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
   // Load audio when mix changes
   useEffect(() => {
     if (mix?.coverImage) {
-      // Try to load a mock audio URI; will fall back to simulated playback
       audio.loadAndPlay('https://example.com/mock-audio.mp3');
     }
   }, [mix?.id]);
@@ -83,9 +83,10 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
     audio.togglePlayPause();
   }, [audio.togglePlayPause]);
 
-  const handleLike = useCallback(() => {
+  // Like/Unlike — AB SUPABASE MEIN SAVE HOGA!
+  const handleLike = useCallback(async () => {
     haptics.medium();
-    setIsLiked(prev => !prev);
+    // Animation
     Animated.sequence([
       Animated.timing(likeScaleAnim, {
         toValue: 1.3,
@@ -98,7 +99,9 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+    // Supabase mein save karo
+    await likeSong();
+  }, [likeSong]);
 
   const handleSeek = useCallback((position: number) => {
     haptics.selection();
@@ -147,7 +150,6 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
       {/* Album Art with Vinyl */}
       <View style={styles.artworkContainer}>
         <View style={styles.artworkWrapper}>
-          {/* Vinyl disc behind artwork */}
           <Animated.View style={[styles.vinylDisc, { transform: [{ rotate: vinylSpin }] }]}>
             <View style={styles.vinylOuter}>
               <View style={styles.vinylGrooves} />
@@ -157,7 +159,6 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
             </View>
           </Animated.View>
 
-          {/* Album artwork on top */}
           <Animated.View style={[styles.artworkFront, { transform: [{ scale: playScaleAnim }] }]}>
             <Image source={{ uri: mix.coverImage }} style={styles.artwork} />
             <View style={styles.artworkShadow} />
@@ -235,7 +236,7 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
             <Ionicons
               name={audio.isPlaying ? 'pause' : 'play'}
               size={32}
-              color={Colors.white}
+              color={Colors.black}
               style={audio.isPlaying ? {} : { marginLeft: 3 }}
             />
           </TouchableOpacity>
@@ -505,6 +506,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
   repeatBadge: {
     position: 'absolute',
