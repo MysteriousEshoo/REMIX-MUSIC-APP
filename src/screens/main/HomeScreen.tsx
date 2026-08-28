@@ -14,7 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { MixCard, DJCard, SkeletonMixCard, SkeletonHorizontalCard } from '../../components';
-import { mockMixes, mockDJs, Mix } from '../../data/mockData';
+import { Mix } from '../../data/mockData';
 import { getGreeting } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
@@ -71,13 +71,35 @@ interface CreatorStats {
   recentPlays: number;
 }
 
+// Top DJ type (real from DB)
+interface TopDJ {
+  id: string;
+  name: string;
+  handle: string;
+  avatar: string;
+  bio: string;
+  followers: number;
+  mixes: number;
+  isVerified: boolean;
+  totalEarnings: number;
+  genre: string;
+  isFollowing: boolean;
+}
+
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const { user } = useAuth();
   const { setQueue, setCurrentMix } = useAudioContext();
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedChip, setSelectedChip] = useState('All');
-  const [songs, setSongs] = useState<Mix[]>([]);
+
+  // Different song lists for different sections
+  const [allSongs, setAllSongs] = useState<Mix[]>([]);
+  const [trendingSongs, setTrendingSongs] = useState<Mix[]>([]);
+  const [newReleaseSongs, setNewReleaseSongs] = useState<Mix[]>([]);
+  const [recommendedSongs, setRecommendedSongs] = useState<Mix[]>([]);
+  const [topDJs, setTopDJs] = useState<TopDJ[]>([]);
+
   const [userName, setUserName] = useState('Music Lover');
   const [notificationCount, setNotificationCount] = useState(0);
   const [isCreatorMode, setIsCreatorMode] = useState(false);
@@ -95,7 +117,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     loadMode();
   }, []);
 
-  // Mode load from AsyncStorage
   const loadMode = async () => {
     try {
       const savedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY);
@@ -114,7 +135,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     return unsubscribe;
   }, [navigation]);
 
-  // Initial load
   useEffect(() => {
     fetchAllData();
   }, []);
@@ -123,61 +143,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const fetchAllData = async () => {
     setIsLoading(true);
     await Promise.all([
-      fetchSongs(),
+      fetchAllSongs(),
+      fetchTrendingSongs(),
+      fetchNewReleases(),
       fetchUserName(),
       fetchNotificationCount(),
       fetchCreatorStats(),
+      fetchTopDJs(),
     ]);
     setIsLoading(false);
-  };
-
-  // Creator stats fetch karo (real-time from Supabase)
-  const fetchCreatorStats = async () => {
-    if (!user) return;
-
-    try {
-      // User ki uploads count
-      const { count: mixCount } = await supabase
-        .from('songs')
-        .select('id', { count: 'exact', head: true })
-        .eq('uploaded_by', user.id);
-
-      // User ke total plays
-      const { data: songsData } = await supabase
-        .from('songs')
-        .select('plays_count')
-        .eq('uploaded_by', user.id);
-
-      const totalPlays = songsData?.reduce((sum, s) => sum + (s.plays_count || 0), 0) || 0;
-
-      // User ke total likes on his songs
-      const { data: likesData } = await supabase
-        .from('songs')
-        .select('likes_count')
-        .eq('uploaded_by', user.id);
-
-      const totalLikes = likesData?.reduce((sum, s) => sum + (s.likes_count || 0), 0) || 0;
-
-      // Followers count
-      const { count: followerCount } = await supabase
-        .from('user_follows')
-        .select('id', { count: 'exact', head: true })
-        .eq('dj_id', user.id);
-
-      // Recent plays (last 7 days simulation)
-      const recentPlays = Math.floor(totalPlays * 0.15);
-
-      setCreatorStats({
-        totalPlays,
-        totalLikes,
-        totalFollowers: followerCount || 0,
-        totalCoins: 0, // Abhi zero, baad mein coins table se
-        totalMixes: mixCount || 0,
-        recentPlays,
-      });
-    } catch (err) {
-      console.log('Error fetching creator stats:', err);
-    }
   };
 
   // User ke liked song IDs fetch karo
@@ -196,167 +170,288 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     }
   };
 
-  // Songs Supabase se fetch karo
-  const fetchSongs = async () => {
+  // ==================== ALL SONGS (for Featured + general) ====================
+  const fetchAllSongs = async () => {
     try {
       const [songsResult, likedIds] = await Promise.all([
         supabase
           .from('songs')
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(20),
+          .limit(50),
         fetchUserLikes(),
       ]);
 
       const { data, error } = songsResult;
 
       if (error) {
-        console.log('[HomeScreen] fetchSongs error:', error.message);
-        setSongs(mockMixes);
-      } else if (data && data.length > 0) {
-        const formattedSongs: Mix[] = data.map((song: any) => ({
-          id: song.id,
-          title: song.title,
-          artist: {
-            id: song.uploaded_by || 'unknown',
-            name: song.artist,
-            handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
-            avatar: 'https://picsum.photos/seed/' + song.artist + '/200/200',
-            bio: '',
-            followers: 0,
-            mixes: 0,
-            isVerified: false,
-            totalEarnings: 0,
-            genre: song.genre || 'Electronic',
-            isFollowing: false,
-          },
-          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
-          duration: song.duration || 0,
-          plays: song.plays_count || 0,
-          likes: song.likes_count || 0,
-          isLiked: likedIds.has(song.id),
-          isDownloaded: song.is_downloaded || false,
-          genre: song.genre || 'Electronic',
-          uploadedAt: song.created_at,
-          isExclusive: song.is_exclusive || false,
-          audioUrl: song.audio_url || '',
-          description: song.description || '',
-        }));
-        setSongs(formattedSongs);
+        console.log('[HomeScreen] fetchAllSongs error:', error.message);
+        setAllSongs([]);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const formattedSongs: Mix[] = data.map((song: any) => formatSong(song, likedIds));
+        setAllSongs(formattedSongs);
+
+        // Recommendations: user ke liked genres ke basis pe
+        fetchRecommendedSongs(data, likedIds);
       } else {
-        setSongs(mockMixes);
+        setAllSongs([]);
+        setRecommendedSongs([]);
       }
     } catch (err) {
-      console.log('[HomeScreen] fetchSongs catch:', err);
-      setSongs(mockMixes);
+      console.log('[HomeScreen] fetchAllSongs catch:', err);
+      setAllSongs([]);
     }
   };
 
-  // Genre wise songs fetch karo
-  const fetchSongsByGenre = async (genre: string) => {
+  // ==================== TRENDING (sorted by plays_count DESC) ====================
+  const fetchTrendingSongs = async () => {
     try {
       const [songsResult, likedIds] = await Promise.all([
         supabase
           .from('songs')
           .select('*')
-          .eq('genre', genre)
-          .order('created_at', { ascending: false })
-          .limit(20),
+          .order('plays_count', { ascending: false })
+          .limit(10),
         fetchUserLikes(),
       ]);
 
       const { data, error } = songsResult;
 
       if (error || !data || data.length === 0) {
-        const filtered = mockMixes.filter(m => m.genre === genre);
-        setSongs(filtered.length > 0 ? filtered : mockMixes.slice(0, 5));
-      } else {
-        const formattedSongs: Mix[] = data.map((song: any) => ({
-          id: song.id,
-          title: song.title,
-          artist: {
-            id: song.uploaded_by || 'unknown',
-            name: song.artist,
-            handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
-            avatar: 'https://picsum.photos/seed/' + song.artist + '/200/200',
-            bio: '',
-            followers: 0,
-            mixes: 0,
-            isVerified: false,
-            totalEarnings: 0,
-            genre: song.genre || 'Electronic',
-            isFollowing: false,
-          },
-          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
-          duration: song.duration || 0,
-          plays: song.plays_count || 0,
-          likes: song.likes_count || 0,
-          isLiked: likedIds.has(song.id),
-          isDownloaded: song.is_downloaded || false,
-          genre: song.genre || 'Electronic',
-          uploadedAt: song.created_at,
-          isExclusive: song.is_exclusive || false,
-          audioUrl: song.audio_url || '',
-          description: song.description || '',
-        }));
-        setSongs(formattedSongs);
+        setTrendingSongs([]);
+        return;
       }
+
+      setTrendingSongs(data.map((song: any) => formatSong(song, likedIds)));
     } catch (err) {
-      console.log('[HomeScreen] fetchSongsByGenre catch:', err);
-      const filtered = mockMixes.filter(m => m.genre === genre);
-      setSongs(filtered.length > 0 ? filtered : mockMixes.slice(0, 5));
+      setTrendingSongs([]);
     }
   };
 
-  // Like/Unlike handler
-  const handleLikeFromHome = useCallback(async (songId: string) => {
-    if (!user) return;
-    haptics.medium();
+  // ==================== NEW RELEASES (sorted by created_at DESC) ====================
+  const fetchNewReleases = async () => {
+    try {
+      const [songsResult, likedIds] = await Promise.all([
+        supabase
+          .from('songs')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(10),
+        fetchUserLikes(),
+      ]);
 
-    const currentSong = songs.find(s => s.id === songId);
-    const wasLiked = currentSong?.isLiked || false;
+      const { data, error } = songsResult;
 
-    // Optimistic update
-    setSongs(prev => prev.map(s =>
-      s.id === songId ? { ...s, isLiked: !s.isLiked, likes: s.isLiked ? s.likes - 1 : s.likes + 1 } : s
-    ));
+      if (error || !data || data.length === 0) {
+        setNewReleaseSongs([]);
+        return;
+      }
+
+      setNewReleaseSongs(data.map((song: any) => formatSong(song, likedIds)));
+    } catch (err) {
+      setNewReleaseSongs([]);
+    }
+  };
+
+  // ==================== RECOMMENDED (based on liked genres) ====================
+  const fetchRecommendedSongs = async (allSongsData: any[], likedIds: Set<string>) => {
+    if (!user || allSongsData.length === 0) {
+      setRecommendedSongs([]);
+      return;
+    }
 
     try {
-      if (wasLiked) {
-        const { data: existing } = await supabase
-          .from('user_likes')
-          .select('id')
-          .eq('user_id', user.id)
-          .eq('song_id', songId)
-          .maybeSingle();
+      // User ke liked songs ke genres nikalo
+      const { data: likedSongs } = await supabase
+        .from('user_likes')
+        .select('song_id')
+        .eq('user_id', user.id);
 
-        if (existing) {
-          const { error } = await supabase.from('user_likes').delete().eq('id', existing.id);
-          if (error) {
-            setSongs(prev => prev.map(s =>
-              s.id === songId ? { ...s, isLiked: true, likes: s.likes + 1 } : s
-            ));
-          }
-        }
-      } else {
-        const { error } = await supabase
-          .from('user_likes')
-          .insert({ user_id: user.id, song_id: songId })
-          .select();
-
-        if (error) {
-          setSongs(prev => prev.map(s =>
-            s.id === songId ? { ...s, isLiked: false, likes: s.likes - 1 } : s
-          ));
-        }
+      if (!likedSongs || likedSongs.length === 0) {
+        setRecommendedSongs([]);
+        return;
       }
-    } catch (err) {
-      setSongs(prev => prev.map(s =>
-        s.id === songId ? { ...s, isLiked: !s.isLiked, likes: s.isLiked ? s.likes - 1 : s.likes + 1 } : s
-      ));
-    }
-  }, [user, songs]);
 
+      const likedSongIds = new Set(likedSongs.map((l: any) => l.song_id));
+
+      // Liked songs ke genres find karo
+      const likedGenres = new Set<string>();
+      allSongsData.forEach(song => {
+        if (likedSongIds.has(song.id) && song.genre) {
+          likedGenres.add(song.genre);
+        }
+      });
+
+      if (likedGenres.size === 0) {
+        setRecommendedSongs([]);
+        return;
+      }
+
+      // Same genres ke songs recommend karo (jo already liked nahi hain)
+      const recommended = allSongsData
+        .filter(song => likedGenres.has(song.genre) && !likedSongIds.has(song.id))
+        .slice(0, 10);
+
+      setRecommendedSongs(recommended.map((song: any) => formatSong(song, likedIds)));
+    } catch (err) {
+      setRecommendedSongs([]);
+    }
+  };
+
+  // ==================== TOP DJs (real from DB) ====================
+  const fetchTopDJs = async () => {
+    try {
+      // Get unique uploaders with most songs and plays
+      const { data: songsData, error } = await supabase
+        .from('songs')
+        .select('uploaded_by, artist, plays_count, likes_count');
+
+      if (error || !songsData || songsData.length === 0) {
+        setTopDJs([]);
+        return;
+      }
+
+      // Group by uploaded_by and aggregate stats
+      const djMap = new Map<string, { name: string; totalPlays: number; totalLikes: number; mixCount: number }>();
+
+      songsData.forEach((song: any) => {
+        const djId = song.uploaded_by;
+        if (!djId) return;
+
+        const existing = djMap.get(djId);
+        if (existing) {
+          existing.totalPlays += song.plays_count || 0;
+          existing.totalLikes += song.likes_count || 0;
+          existing.mixCount += 1;
+        } else {
+          djMap.set(djId, {
+            name: song.artist || 'Unknown',
+            totalPlays: song.plays_count || 0,
+            totalLikes: song.likes_count || 0,
+            mixCount: 1,
+          });
+        }
+      });
+
+      // Sort by total plays (most popular first)
+      const sortedDjs = Array.from(djMap.entries())
+        .sort((a, b) => b[1].totalPlays - a[1].totalPlays)
+        .slice(0, 10);
+
+      // Get follower counts for each DJ
+      const djIds = sortedDjs.map(([id]) => id);
+      const { data: followData } = await supabase
+        .from('user_follows')
+        .select('dj_id')
+        .in('dj_id', djIds);
+
+      // Count followers per DJ
+      const followerCounts = new Map<string, number>();
+      followData?.forEach((f: any) => {
+        followerCounts.set(f.dj_id, (followerCounts.get(f.dj_id) || 0) + 1);
+      });
+
+      // Check which DJs the current user follows
+      let followingSet = new Set<string>();
+      if (user) {
+        const { data: myFollows } = await supabase
+          .from('user_follows')
+          .select('dj_id')
+          .eq('user_id', user.id);
+        followingSet = new Set(myFollows?.map((f: any) => f.dj_id) || []);
+      }
+
+      // Format as TopDJ[]
+      const formatted: TopDJ[] = sortedDjs.map(([djId, stats]) => ({
+        id: djId,
+        name: stats.name,
+        handle: '@' + stats.name.toLowerCase().replace(/\s+/g, ''),
+        avatar: 'https://picsum.photos/seed/' + djId + '/200/200',
+        bio: '',
+        followers: followerCounts.get(djId) || 0,
+        mixes: stats.mixCount,
+        isVerified: stats.totalPlays > 1000, // Auto-verify if popular
+        totalEarnings: 0,
+        genre: '',
+        isFollowing: followingSet.has(djId),
+      }));
+
+      setTopDJs(formatted);
+    } catch (err) {
+      setTopDJs([]);
+    }
+  };
+
+  // ==================== CREATOR STATS ====================
+  const fetchCreatorStats = async () => {
+    if (!user) return;
+
+    try {
+      const { count: mixCount } = await supabase
+        .from('songs')
+        .select('id', { count: 'exact', head: true })
+        .eq('uploaded_by', user.id);
+
+      const { data: songsData } = await supabase
+        .from('songs')
+        .select('plays_count, likes_count')
+        .eq('uploaded_by', user.id);
+
+      const totalPlays = songsData?.reduce((sum, s) => sum + (s.plays_count || 0), 0) || 0;
+      const totalLikes = songsData?.reduce((sum, s) => sum + (s.likes_count || 0), 0) || 0;
+
+      const { count: followerCount } = await supabase
+        .from('user_follows')
+        .select('id', { count: 'exact', head: true })
+        .eq('dj_id', user.id);
+
+      setCreatorStats({
+        totalPlays,
+        totalLikes,
+        totalFollowers: followerCount || 0,
+        totalCoins: 0,
+        totalMixes: mixCount || 0,
+        recentPlays: Math.floor(totalPlays * 0.15),
+      });
+    } catch (err) {
+      console.log('Error fetching creator stats:', err);
+    }
+  };
+
+  // ==================== HELPER: Format song from DB ====================
+  const formatSong = (song: any, likedIds: Set<string>): Mix => ({
+    id: song.id,
+    title: song.title,
+    artist: {
+      id: song.uploaded_by || 'unknown',
+      name: song.artist,
+      handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
+      avatar: 'https://picsum.photos/seed/' + song.artist + '/200/200',
+      bio: '',
+      followers: 0,
+      mixes: 0,
+      isVerified: false,
+      totalEarnings: 0,
+      genre: song.genre || 'Electronic',
+      isFollowing: false,
+    },
+    coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
+    duration: song.duration || 0,
+    plays: song.plays_count || 0,
+    likes: song.likes_count || 0,
+    isLiked: likedIds.has(song.id),
+    isDownloaded: song.is_downloaded || false,
+    genre: song.genre || 'Electronic',
+    uploadedAt: song.created_at,
+    isExclusive: song.is_exclusive || false,
+    audioUrl: song.audio_url || '',
+    description: song.description || '',
+  });
+
+  // ==================== USER DATA ====================
   const fetchUserName = async () => {
     if (!user) return;
     try {
@@ -390,50 +485,127 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     }
   };
 
+  // ==================== LIKE HANDLER ====================
+  const handleLikeFromHome = useCallback(async (songId: string) => {
+    if (!user) return;
+    haptics.medium();
+
+    const currentSong = allSongs.find(s => s.id === songId);
+    const wasLiked = currentSong?.isLiked || false;
+
+    // Optimistic update — all lists
+    const updateSong = (s: Mix) =>
+      s.id === songId ? { ...s, isLiked: !s.isLiked, likes: s.isLiked ? s.likes - 1 : s.likes + 1 } : s;
+
+    setAllSongs(prev => prev.map(updateSong));
+    setTrendingSongs(prev => prev.map(updateSong));
+    setNewReleaseSongs(prev => prev.map(updateSong));
+    setRecommendedSongs(prev => prev.map(updateSong));
+
+    try {
+      if (wasLiked) {
+        const { data: existing } = await supabase
+          .from('user_likes')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('song_id', songId)
+          .maybeSingle();
+
+        if (existing) {
+          const { error } = await supabase.from('user_likes').delete().eq('id', existing.id);
+          if (error) revertLike(songId, true);
+        }
+      } else {
+        const { error } = await supabase
+          .from('user_likes')
+          .insert({ user_id: user.id, song_id: songId })
+          .select();
+
+        if (error) revertLike(songId, false);
+      }
+    } catch (err) {
+      revertLike(songId, wasLiked);
+    }
+  }, [user, allSongs]);
+
+  const revertLike = (songId: string, wasLiked: boolean) => {
+    const revert = (s: Mix) =>
+      s.id === songId ? { ...s, isLiked: wasLiked, likes: wasLiked ? s.likes + 1 : s.likes - 1 } : s;
+    setAllSongs(prev => prev.map(revert));
+    setTrendingSongs(prev => prev.map(revert));
+    setNewReleaseSongs(prev => prev.map(revert));
+    setRecommendedSongs(prev => prev.map(revert));
+  };
+
+  // ==================== PLAY HANDLER ====================
+  const handlePlaySong = useCallback((mix: Mix) => {
+    haptics.light();
+    const visibleSongs = allSongs.length > 0 ? allSongs : [mix];
+    setQueue(visibleSongs);
+    setCurrentMix(mix);
+    navigation.navigate('Player', { mix });
+  }, [allSongs, navigation, setQueue, setCurrentMix]);
+
+  // Genre chip change
+  useEffect(() => {
+    if (isCreatorMode) return;
+    if (selectedChip === 'All') {
+      fetchAllSongs();
+    } else {
+      fetchSongsByGenre(selectedChip);
+    }
+  }, [selectedChip]);
+
+  const fetchSongsByGenre = async (genre: string) => {
+    try {
+      const [songsResult, likedIds] = await Promise.all([
+        supabase
+          .from('songs')
+          .select('*')
+          .eq('genre', genre)
+          .order('created_at', { ascending: false })
+          .limit(20),
+        fetchUserLikes(),
+      ]);
+
+      const { data, error } = songsResult;
+
+      if (error || !data || data.length === 0) {
+        setAllSongs([]);
+      } else {
+        setAllSongs(data.map((song: any) => formatSong(song, likedIds)));
+      }
+    } catch (err) {
+      setAllSongs([]);
+    }
+  };
+
+  // Derived data
+  const featuredMixes = allSongs.filter(m => m.isExclusive);
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     haptics.light();
     fetchAllData().then(() => setRefreshing(false));
   }, []);
 
-  // Jab koi song play ho — queue set karo with visible songs
-  const handlePlaySong = useCallback((mix: Mix) => {
-    haptics.light();
-    // Set queue with all visible songs
-    const visibleSongs = songs.length > 0 ? songs : [mix];
-    setQueue(visibleSongs);
-    setCurrentMix(mix);
-    navigation.navigate('Player', { mix });
-  }, [songs, navigation, setQueue, setCurrentMix]);
-
-  // Jab genre chip change ho — SIRF LISTENER MODE KE LIYE
-  useEffect(() => {
-    if (isCreatorMode) return; // Creator ko genre chips nahi chahiye
-    setIsLoading(true);
-    if (selectedChip === 'All') {
-      fetchSongs().then(() => setIsLoading(false));
-    } else {
-      fetchSongsByGenre(selectedChip).then(() => setIsLoading(false));
-    }
-  }, [selectedChip]);
-
-  const featuredMixes = songs.filter(m => m.isExclusive);
-  const trendingMixes = songs.slice(0, 6);
-  const newReleases = songs.slice(4, 10);
-  const topDJs = mockDJs.slice(0, 5);
-
   const chips = ['All', 'Electronic', 'House', 'Techno', 'Deep House', 'Trance'];
 
-  // Format number helper
   const formatNumber = (num: number): string => {
     if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
     if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
     return num.toString();
   };
 
-  // ========== CREATOR MODE HOME ==========
-  // Sirf creator-specific content: Stats, Upload, My Uploads, Earnings
-  // Koi bhi doosron ke mixes nahi dikhenge
+  // ==================== EMPTY STATE COMPONENT ====================
+  const EmptySection: React.FC<{ icon: string; title: string; subtitle: string }> = ({ icon, title, subtitle }) => (
+    <View style={styles.emptySection}>
+      <Ionicons name={icon as any} size={40} color={Colors.textTertiary} />
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyText}>{subtitle}</Text>
+    </View>
+  );
+
+  // ==================== CREATOR MODE HOME ====================
   const renderCreatorHome = () => (
     <>
       {/* Creator Stats Dashboard */}
@@ -482,8 +654,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <Text style={styles.seeAll}>View All</Text>
           </TouchableOpacity>
         </View>
-        {songs.filter(s => s.artist.id === user?.id).length > 0 ? (
-          songs.filter(s => s.artist.id === user?.id).slice(0, 5).map((mix, index) => (
+        {allSongs.filter(s => s.artist.id === user?.id).length > 0 ? (
+          allSongs.filter(s => s.artist.id === user?.id).slice(0, 5).map((mix, index) => (
             <AnimatedListItem key={mix.id} index={index} delay={200}>
               <MixCard
                 variant="horizontal"
@@ -494,18 +666,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             </AnimatedListItem>
           ))
         ) : (
-          <View style={styles.emptySection}>
-            <Ionicons name="cloud-upload-outline" size={48} color={Colors.textTertiary} />
-            <Text style={styles.emptyTitle}>No uploads yet</Text>
-            <Text style={styles.emptyText}>Share your first mix with the world!</Text>
-            <TouchableOpacity
-              style={styles.emptyUploadButton}
-              onPress={() => { haptics.light(); navigation.navigate('Upload'); }}
-            >
-              <Ionicons name="add" size={18} color={Colors.white} />
-              <Text style={styles.emptyUploadButtonText}>Upload Now</Text>
-            </TouchableOpacity>
-          </View>
+          <EmptySection icon="cloud-upload-outline" title="No uploads yet" subtitle="Share your first mix with the world!" />
         )}
       </View>
 
@@ -571,7 +732,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     </>
   );
 
-  // ========== LISTENER MODE HOME ==========
+  // ==================== LISTENER MODE HOME ====================
   const renderListenerHome = () => (
     <>
       {/* Genre Chips */}
@@ -621,13 +782,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             contentContainerStyle={styles.featuredList}
           />
         ) : (
-          <View style={styles.emptySection}>
-            <Text style={styles.emptyText}>No featured mixes yet</Text>
-          </View>
+          <EmptySection icon="star-outline" title="No featured mixes yet" subtitle="Exclusive mixes will appear here" />
         )}
       </View>
 
-      {/* Trending Now */}
+      {/* Trending Now — sorted by plays_count DESC */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>📈 Trending Now</Text>
@@ -635,26 +794,30 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <Text style={styles.seeAll}>See All</Text>
           </TouchableOpacity>
         </View>
-        <FlatList
-          horizontal
-          data={trendingMixes}
-          keyExtractor={item => item.id}
-          renderItem={({ item, index }) => (
-            <AnimatedListItem index={index} delay={200}>
-              <MixCard
-                mix={item}
-                onPress={() => handlePlaySong(item)}
-                onPlay={() => handlePlaySong(item)}
-                onLike={() => handleLikeFromHome(item.id)}
-              />
-            </AnimatedListItem>
-          )}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalList}
-        />
+        {trendingSongs.length > 0 ? (
+          <FlatList
+            horizontal
+            data={trendingSongs}
+            keyExtractor={item => item.id}
+            renderItem={({ item, index }) => (
+              <AnimatedListItem index={index} delay={200}>
+                <MixCard
+                  mix={item}
+                  onPress={() => handlePlaySong(item)}
+                  onPlay={() => handlePlaySong(item)}
+                  onLike={() => handleLikeFromHome(item.id)}
+                />
+              </AnimatedListItem>
+            )}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.horizontalList}
+          />
+        ) : (
+          <EmptySection icon="trending-up-outline" title="Nothing trending yet" subtitle="Songs with most plays will appear here" />
+        )}
       </View>
 
-      {/* New Releases */}
+      {/* New Releases — sorted by created_at DESC */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>✨ New Releases</Text>
@@ -662,19 +825,23 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <Text style={styles.seeAll}>See All</Text>
           </TouchableOpacity>
         </View>
-        {newReleases.slice(0, 4).map((mix, index) => (
-          <AnimatedListItem key={mix.id} index={index} delay={400}>
-            <MixCard
-              variant="horizontal"
-              mix={mix}
-              onPress={() => handlePlaySong(mix)}
-              onPlay={() => handlePlaySong(mix)}
-            />
-          </AnimatedListItem>
-        ))}
+        {newReleaseSongs.length > 0 ? (
+          newReleaseSongs.slice(0, 4).map((mix, index) => (
+            <AnimatedListItem key={mix.id} index={index} delay={400}>
+              <MixCard
+                variant="horizontal"
+                mix={mix}
+                onPress={() => handlePlaySong(mix)}
+                onPlay={() => handlePlaySong(mix)}
+              />
+            </AnimatedListItem>
+          ))
+        ) : (
+          <EmptySection icon="time-outline" title="No new releases" subtitle="Recently uploaded songs will appear here" />
+        )}
       </View>
 
-      {/* Because You Liked... */}
+      {/* Because You Liked — based on actual liked genres */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>🎧 Because You Liked...</Text>
@@ -682,25 +849,29 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <Text style={styles.seeAll}>See All</Text>
           </TouchableOpacity>
         </View>
-        <FlatList
-          horizontal
-          data={[...trendingMixes].reverse()}
-          keyExtractor={item => `rec-${item.id}`}
-          renderItem={({ item, index }) => (
-            <AnimatedListItem index={index} delay={500}>
-              <MixCard
-                variant="compact"
-                mix={item}
-                onPress={() => handlePlaySong(item)}
-              />
-            </AnimatedListItem>
-          )}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalList}
-        />
+        {recommendedSongs.length > 0 ? (
+          <FlatList
+            horizontal
+            data={recommendedSongs}
+            keyExtractor={item => `rec-${item.id}`}
+            renderItem={({ item, index }) => (
+              <AnimatedListItem index={index} delay={500}>
+                <MixCard
+                  variant="compact"
+                  mix={item}
+                  onPress={() => handlePlaySong(item)}
+                />
+              </AnimatedListItem>
+            )}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.horizontalList}
+          />
+        ) : (
+          <EmptySection icon="heart-outline" title="No recommendations yet" subtitle="Like some songs and we'll recommend similar ones" />
+        )}
       </View>
 
-      {/* Top DJs */}
+      {/* Top DJs — real from DB */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>⭐ Top DJs</Text>
@@ -708,21 +879,25 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <Text style={styles.seeAll}>See All</Text>
           </TouchableOpacity>
         </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalList}
-        >
-          {topDJs.map((dj, index) => (
-            <AnimatedListItem key={dj.id} index={index} delay={300}>
-              <DJCard
-                dj={dj}
-                variant="compact"
-                onPress={() => navigation.navigate('DJProfile', { dj })}
-              />
-            </AnimatedListItem>
-          ))}
-        </ScrollView>
+        {topDJs.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.horizontalList}
+          >
+            {topDJs.map((dj, index) => (
+              <AnimatedListItem key={dj.id} index={index} delay={300}>
+                <DJCard
+                  dj={dj}
+                  variant="compact"
+                  onPress={() => navigation.navigate('DJProfile', { dj })}
+                />
+              </AnimatedListItem>
+            ))}
+          </ScrollView>
+        ) : (
+          <EmptySection icon="people-outline" title="No DJs yet" subtitle="Artists who upload mixes will appear here" />
+        )}
       </View>
     </>
   );
@@ -750,8 +925,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           </View>
           <TouchableOpacity
             style={styles.notifButton}
-            onPress={() => { 
-              haptics.selection(); 
+            onPress={() => {
+              haptics.selection();
               navigation.navigate('Notifications');
               setNotificationCount(0);
             }}
@@ -783,7 +958,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
 
         {isLoading ? (
           <>
-            {/* Skeleton loaders */}
             <View style={styles.section}>
               <SkeletonMixCard />
             </View>
@@ -848,7 +1022,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.white,
   },
-  // Mode Badge
   modeBadgeContainer: {
     paddingHorizontal: Spacing.xl,
     marginBottom: Spacing.lg,
@@ -866,7 +1039,6 @@ const styles = StyleSheet.create({
     ...Typography.bodySmall,
     fontWeight: '600',
   },
-  // Chips
   chipsContainer: {
     marginBottom: Spacing.lg,
   },
@@ -945,7 +1117,6 @@ const styles = StyleSheet.create({
     ...Typography.button,
     color: Colors.white,
   },
-  // Creator Stats Grid
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -968,7 +1139,6 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginTop: Spacing.xs,
   },
-  // Upload Button
   uploadButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -983,7 +1153,6 @@ const styles = StyleSheet.create({
     ...Typography.button,
     color: Colors.white,
   },
-  // Earnings Card
   earningsCard: {
     backgroundColor: Colors.backgroundElevated,
     borderRadius: BorderRadius.lg,
@@ -1032,7 +1201,6 @@ const styles = StyleSheet.create({
     ...Typography.button,
     color: Colors.gold,
   },
-  // Quick Actions
   quickActionsGrid: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.xl,

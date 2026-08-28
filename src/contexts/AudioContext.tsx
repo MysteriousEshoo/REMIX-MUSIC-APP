@@ -37,6 +37,7 @@ interface AudioContextType {
   playNext: () => Promise<void>;
   playPrevious: () => Promise<void>;
   playSongAtIndex: (index: number) => Promise<void>;
+  reorderQueue: (fromIndex: number, toIndex: number) => void;
   hasNext: boolean;
   hasPrevious: boolean;
 
@@ -323,6 +324,33 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCurrentIndexState(-1);
   }, []);
 
+  const reorderQueue = useCallback((fromIndex: number, toIndex: number) => {
+    setQueueState(prev => {
+      const newQueue = [...prev];
+      const [movedItem] = newQueue.splice(fromIndex, 1);
+      newQueue.splice(toIndex, 0, movedItem);
+      queueRef.current = newQueue;
+
+      // Update currentIndex to follow the currently playing song
+      const ci = currentIndexRef.current;
+      let newCurrentIndex = ci;
+      if (ci === fromIndex) {
+        // Currently playing song was moved
+        newCurrentIndex = toIndex;
+      } else if (fromIndex < ci && toIndex >= ci) {
+        // Song moved from before current to after — current shifts back
+        newCurrentIndex = ci - 1;
+      } else if (fromIndex > ci && toIndex <= ci) {
+        // Song moved from after current to before — current shifts forward
+        newCurrentIndex = ci + 1;
+      }
+      currentIndexRef.current = newCurrentIndex;
+      setCurrentIndexState(newCurrentIndex);
+
+      return newQueue;
+    });
+  }, []);
+
   const playSongAtIndex = useCallback(async (index: number) => {
     if (index >= 0 && index < queue.length) {
       const song = queue[index];
@@ -499,6 +527,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setCurrentIndex,
         addToQueue,
         removeFromQueue,
+        reorderQueue,
         clearQueue,
         playNext,
         playPrevious,

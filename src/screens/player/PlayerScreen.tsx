@@ -8,8 +8,10 @@ import {
   Animated,
   Dimensions,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { GestureHandlerRootView, PanGestureHandler, State, Swipeable } from 'react-native-gesture-handler';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { Mix } from '../../data/mockData';
 import { formatDuration } from '../../utils/helpers';
@@ -18,6 +20,8 @@ import { useLikeSong } from '../../hooks/useLikeSong';
 import { haptics } from '../../utils/haptics';
 
 const { width, height } = Dimensions.get('window');
+const SWIPE_THRESHOLD = -80;
+const QUEUE_ITEM_HEIGHT = 56;
 
 interface PlayerScreenProps {
   navigation: any;
@@ -41,6 +45,11 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
   const playScaleAnim = useRef(new Animated.Value(1)).current;
   const likeScaleAnim = useRef(new Animated.Value(1)).current;
 
+  // Drag state
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const dragTranslateY = useRef(new Animated.Value(0)).current;
+  const dragItemHeight = useRef(0);
+
   // Start vinyl spinning when playing
   useEffect(() => {
     if (audio.isPlaying) {
@@ -63,13 +72,10 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
   // Load audio when mix changes + find position in queue
   useEffect(() => {
     if (mix) {
-      // Find this mix in the queue
       const queueIndex = audio.queue.findIndex(q => q.id === mix.id);
       if (queueIndex >= 0) {
-        // Already in queue — set currentIndex
         audio.setCurrentMix(mix);
       } else {
-        // Not in queue — add it and set as current
         if (audio.queue.length === 0) {
           audio.setQueue([mix]);
         } else {
@@ -98,10 +104,8 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
     audio.togglePlayPause();
   }, [audio.togglePlayPause]);
 
-  // Like/Unlike — AB SUPABASE MEIN SAVE HOGA!
   const handleLike = useCallback(async () => {
     haptics.medium();
-    // Animation
     Animated.sequence([
       Animated.timing(likeScaleAnim, {
         toValue: 1.3,
@@ -114,7 +118,6 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
         useNativeDriver: true,
       }),
     ]).start();
-    // Supabase mein save karo
     await likeSong();
   }, [likeSong]);
 
@@ -133,6 +136,166 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
     audio.playNext();
   }, [audio.playNext]);
 
+  // ==================== SWIPE TO DELETE ====================
+
+  const renderSwipeActions = useCallback((progress: Animated.AnimatedInterpolation<number>, index: number) => {
+    const translateX = progress.interpolate({
+      inputRange: [-100, 0],
+      outputRange: [80, 0],
+      extrapolate: 'clamp',
+    });
+
+    return (
+      <Animated.View style={[styles.deleteAction, { transform: [{ translateX }] }]}>
+        <Ionicons name="trash" size={20} color={Colors.white} />
+        <Text style={styles.deleteActionText}>Delete</Text>
+      </Animated.View>
+    );
+  }, []);
+
+  const handleSwipeDelete = useCallback((index: number) => {
+    haptics.medium();
+    audio.removeFromQueue(index);
+  }, [audio.removeFromQueue]);
+
+  // ==================== DRAG TO REORDER ====================
+
+  const handleDragStart = useCallback((index: number) => {
+    haptics.medium();
+    setDraggingIndex(index);
+  }, []);
+
+  const handleDragEnd = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex !== toIndex && toIndex >= 0 && toIndex < audio.queue.length) {
+      haptics.success();
+      audio.reorderQueue(fromIndex, toIndex);
+    }
+    setDraggingIndex(null);
+    dragTranslateY.setValue(0);
+  }, [audio.reorderQueue, audio.queue.length]);
+
+  // ==================== QUEUE ITEM COMPONENT ====================
+
+  const QueueItem = useCallback(({ song, index }: { song: Mix; index: number }) => {
+    const isCurrentlyPlaying = index === audio.currentIndex;
+    const isDragging = draggingIndex === index;
+
+    // Pan gesture for drag reorder
+    const panRef = useRef<any>(null);
+    const itemTranslateY = useRef(new Animated.Value(0)).current;
+    const itemScale = useRef(new Animated.Value(1)).current;
+    const lastTap = useRef(0);
+
+    const onPanGestureEvent = Animated.event(
+      [{ nativeEvent: { translationY: itemTranslateY } }],
+      { useNativeDriver: true }
+    );
+
+    const onPanHandlerStateChange = (event: any) => {
+      if (event.oldState === State.ACTIVE) {
+        const translationY = event.nativeEvent.translationY;
+        const itemIndex = index;
+
+        // Calculate target index based on translation
+        const targetIndex = Math.round(itemIndex + translationY / QUEUE_ITEM_HEIGHT);
+        const clampedIndex = Math.max(0, Math.min(audio.queue.length - 1, targetIndex));
+
+        // Animate to final position
+        Animated.spring(itemTranslateY, {
+          toValue: 0,
+          useNativeDriver: true,
+        }).start();
+
+        Animated.spring(itemScale, {
+          toValue: 1,
+          useNativeDriver: true,
+        }).start();
+
+        handleDragEnd(itemIndex, clampedIndex);
+      } else if (event.nativeEvent.state === State.ACTIVE) {
+        // Drag start — scale up slightly
+        Animated.spring(itemScale, {
+          toValue: 1.05,
+          useNativeDriver: true,
+        }).start();
+      }
+    };
+
+    return (
+      <Swipeable
+        renderRightActions={(progress) => renderSwipeActions(progress, index)}
+        onSwipeableOpen={() => handleSwipeDelete(index)}
+        overshootRight={false}
+        friction={2}
+        rightThreshold={40}
+      >
+        <PanGestureHandler
+          ref={panRef}
+          onGestureEvent={onPanGestureEvent}
+          onHandlerStateChange={onPanHandlerStateChange}
+          simultaneousHandlers={[]}
+          enabled={!isCurrentlyPlaying}
+        >
+          <Animated.View
+            style={[
+              styles.queueItem,
+              isCurrentlyPlaying && styles.queueItemActive,
+              isDragging && styles.queueItemDragging,
+              {
+                transform: [{ translateY: itemTranslateY }, { scale: itemScale }],
+                zIndex: isDragging ? 100 : 1,
+              },
+            ]}
+          >
+            {/* Drag Handle */}
+            {!isCurrentlyPlaying && (
+              <View style={styles.dragHandle}>
+                <Ionicons name="reorder-three" size={18} color={Colors.textTertiary} />
+              </View>
+            )}
+
+            {/* Album Art */}
+            <Image source={{ uri: song.coverImage }} style={styles.queueItemImage} />
+
+            {/* Song Info */}
+            <View style={styles.queueItemInfo}>
+              <Text
+                style={[styles.queueItemTitle, isCurrentlyPlaying && styles.queueItemTitleActive]}
+                numberOfLines={1}
+              >
+                {song.title}
+              </Text>
+              <Text style={styles.queueItemArtist} numberOfLines={1}>
+                {song.artist?.name || 'Unknown'}
+              </Text>
+            </View>
+
+            {/* Currently Playing Indicator */}
+            {isCurrentlyPlaying && (
+              <View style={styles.nowPlayingIndicator}>
+                <Ionicons name="musical-note" size={16} color={Colors.primary} />
+              </View>
+            )}
+
+            {/* Play Button (tap to play) */}
+            {!isCurrentlyPlaying && (
+              <TouchableOpacity
+                style={styles.queuePlayButton}
+                onPress={() => {
+                  haptics.selection();
+                  audio.playSongAtIndex(index);
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="play" size={16} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+          </Animated.View>
+        </PanGestureHandler>
+      </Swipeable>
+    );
+  }, [audio.currentIndex, audio.queue.length, audio.playSongAtIndex, draggingIndex, renderSwipeActions, handleSwipeDelete, handleDragEnd]);
+
   if (!mix) return null;
 
   const vinylSpin = vinylRotation.interpolate({
@@ -141,201 +304,190 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
   });
 
   return (
-    <View style={styles.container}>
-      {/* Background */}
-      <View style={styles.background}>
-        <Image source={{ uri: mix.coverImage }} style={styles.bgImage} />
-        <View style={styles.bgOverlay} />
-      </View>
-
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => { haptics.light(); navigation.goBack(); }} style={styles.headerButton}>
-          <Ionicons name="chevron-down" size={28} color={Colors.white} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerLabel}>Playing from</Text>
-          <Text style={styles.headerSource}>{mix.genre}</Text>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={styles.container}>
+        {/* Background */}
+        <View style={styles.background}>
+          <Image source={{ uri: mix.coverImage }} style={styles.bgImage} />
+          <View style={styles.bgOverlay} />
         </View>
-        <TouchableOpacity style={styles.headerButton}>
-          <Ionicons name="ellipsis-horizontal" size={24} color={Colors.white} />
-        </TouchableOpacity>
-      </View>
 
-      {/* Album Art with Vinyl */}
-      <View style={styles.artworkContainer}>
-        <View style={styles.artworkWrapper}>
-          <Animated.View style={[styles.vinylDisc, { transform: [{ rotate: vinylSpin }] }]}>
-            <View style={styles.vinylOuter}>
-              <View style={styles.vinylGrooves} />
-              <View style={styles.vinylInner}>
-                <View style={styles.vinylLabel} />
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => { haptics.light(); navigation.goBack(); }} style={styles.headerButton}>
+            <Ionicons name="chevron-down" size={28} color={Colors.white} />
+          </TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerLabel}>Playing from</Text>
+            <Text style={styles.headerSource}>{mix.genre}</Text>
+          </View>
+          <TouchableOpacity style={styles.headerButton}>
+            <Ionicons name="ellipsis-horizontal" size={24} color={Colors.white} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Album Art with Vinyl */}
+        <View style={styles.artworkContainer}>
+          <View style={styles.artworkWrapper}>
+            <Animated.View style={[styles.vinylDisc, { transform: [{ rotate: vinylSpin }] }]}>
+              <View style={styles.vinylOuter}>
+                <View style={styles.vinylGrooves} />
+                <View style={styles.vinylInner}>
+                  <View style={styles.vinylLabel} />
+                </View>
+              </View>
+            </Animated.View>
+
+            <Animated.View style={[styles.artworkFront, { transform: [{ scale: playScaleAnim }] }]}>
+              <Image source={{ uri: mix.coverImage }} style={styles.artwork} />
+              <View style={styles.artworkShadow} />
+            </Animated.View>
+          </View>
+        </View>
+
+        {/* Track Info */}
+        <View style={styles.trackInfo}>
+          <View style={styles.trackInfoRow}>
+            <View style={styles.trackTextContainer}>
+              <Text style={styles.trackTitle} numberOfLines={1}>{mix.title}</Text>
+              <View style={styles.artistRow}>
+                {mix.artist?.isVerified && (
+                  <Ionicons name="checkmark-circle" size={16} color={Colors.primary} />
+                )}
+                <Text style={styles.trackArtist} numberOfLines={1}>{mix.artist?.name}</Text>
               </View>
             </View>
-          </Animated.View>
-
-          <Animated.View style={[styles.artworkFront, { transform: [{ scale: playScaleAnim }] }]}>
-            <Image source={{ uri: mix.coverImage }} style={styles.artwork} />
-            <View style={styles.artworkShadow} />
-          </Animated.View>
-        </View>
-      </View>
-
-      {/* Track Info */}
-      <View style={styles.trackInfo}>
-        <View style={styles.trackInfoRow}>
-          <View style={styles.trackTextContainer}>
-            <Text style={styles.trackTitle} numberOfLines={1}>{mix.title}</Text>
-            <View style={styles.artistRow}>
-              {mix.artist?.isVerified && (
-                <Ionicons name="checkmark-circle" size={16} color={Colors.primary} />
-              )}
-              <Text style={styles.trackArtist} numberOfLines={1}>{mix.artist?.name}</Text>
-            </View>
+            <TouchableOpacity onPress={handleLike} style={styles.likeButton}>
+              <Animated.View style={{ transform: [{ scale: likeScaleAnim }] }}>
+                <Ionicons
+                  name={isLiked ? 'heart' : 'heart-outline'}
+                  size={28}
+                  color={isLiked ? Colors.primary : Colors.white}
+                />
+              </Animated.View>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity onPress={handleLike} style={styles.likeButton}>
-            <Animated.View style={{ transform: [{ scale: likeScaleAnim }] }}>
-              <Ionicons
-                name={isLiked ? 'heart' : 'heart-outline'}
-                size={28}
-                color={isLiked ? Colors.primary : Colors.white}
-              />
-            </Animated.View>
+        </View>
+
+        {/* Progress Bar */}
+        <View style={styles.progressContainer}>
+          <TouchableOpacity
+            style={styles.progressBarTouchable}
+            onPress={(e) => {
+              const x = e.nativeEvent.locationX;
+              const barWidth = width - Spacing.xxl * 2;
+              const ratio = Math.max(0, Math.min(1, x / barWidth));
+              handleSeek(ratio * audio.duration);
+            }}
+            activeOpacity={1}
+          >
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, { width: `${(audio.progress || 0) * 100}%` }]}>
+                <View style={styles.progressDot} />
+              </View>
+            </View>
           </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Progress Bar */}
-      <View style={styles.progressContainer}>
-        <TouchableOpacity
-          style={styles.progressBarTouchable}
-          onPress={(e) => {
-            const x = e.nativeEvent.locationX;
-            const barWidth = width - Spacing.xxl * 2;
-            const ratio = Math.max(0, Math.min(1, x / barWidth));
-            handleSeek(ratio * audio.duration);
-          }}
-          activeOpacity={1}
-        >
-          <View style={styles.progressBarBg}>
-            <View style={[styles.progressBarFill, { width: `${(audio.progress || 0) * 100}%` }]}>
-              <View style={styles.progressDot} />
-            </View>
+          <View style={styles.timeRow}>
+            <Text style={styles.timeText}>{formatDuration(audio.currentTime)}</Text>
+            <Text style={styles.timeText}>{formatDuration(audio.duration || mix.duration)}</Text>
           </View>
-        </TouchableOpacity>
-        <View style={styles.timeRow}>
-          <Text style={styles.timeText}>{formatDuration(audio.currentTime)}</Text>
-          <Text style={styles.timeText}>{formatDuration(audio.duration || mix.duration)}</Text>
         </View>
-      </View>
 
-      {/* Controls */}
-      <View style={styles.controls}>
-        <TouchableOpacity
-          onPress={() => { haptics.selection(); setIsShuffled(!isShuffled); }}
-          style={styles.controlButton}
-        >
-          <Ionicons
-            name="shuffle"
-            size={22}
-            color={isShuffled ? Colors.primary : Colors.textSecondary}
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.controlButton} onPress={handleSkipBack}>
-          <Ionicons name="play-skip-back" size={28} color={Colors.white} />
-        </TouchableOpacity>
-
-        <Animated.View style={{ transform: [{ scale: playScaleAnim }] }}>
-          <TouchableOpacity style={styles.playButton} onPress={handlePlayPause}>
+        {/* Controls */}
+        <View style={styles.controls}>
+          <TouchableOpacity
+            onPress={() => { haptics.selection(); setIsShuffled(!isShuffled); }}
+            style={styles.controlButton}
+          >
             <Ionicons
-              name={audio.isPlaying ? 'pause' : 'play'}
-              size={32}
-              color={Colors.black}
-              style={audio.isPlaying ? {} : { marginLeft: 3 }}
+              name="shuffle"
+              size={22}
+              color={isShuffled ? Colors.primary : Colors.textSecondary}
             />
           </TouchableOpacity>
-        </Animated.View>
 
-        <TouchableOpacity style={styles.controlButton} onPress={handleSkipForward}>
-          <Ionicons name="play-skip-forward" size={28} color={Colors.white} />
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.controlButton} onPress={handleSkipBack}>
+            <Ionicons name="play-skip-back" size={28} color={Colors.white} />
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={() => {
-            haptics.selection();
-            setRepeatMode(repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off');
-          }}
-          style={styles.controlButton}
-        >
-          <Ionicons
-            name={repeatMode === 'one' ? 'repeat' : 'repeat-outline'}
-            size={22}
-            color={repeatMode !== 'off' ? Colors.primary : Colors.textSecondary}
-          />
-          {repeatMode === 'one' && (
-            <Text style={styles.repeatBadge}>1</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+          <Animated.View style={{ transform: [{ scale: playScaleAnim }] }}>
+            <TouchableOpacity style={styles.playButton} onPress={handlePlayPause}>
+              <Ionicons
+                name={audio.isPlaying ? 'pause' : 'play'}
+                size={32}
+                color={Colors.black}
+                style={audio.isPlaying ? {} : { marginLeft: 3 }}
+              />
+            </TouchableOpacity>
+          </Animated.View>
 
-      {/* Extra Controls */}
-      <View style={styles.extraControls}>
-        <TouchableOpacity style={styles.extraButton}>
-          <Ionicons name="airplane" size={20} color={Colors.white} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.extraButton}>
-          <Ionicons name="chatbubble-ellipses-outline" size={20} color={Colors.white} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.extraButton} onPress={() => { haptics.selection(); setShowQueue(!showQueue); }}>
-          <Ionicons name="list" size={20} color={showQueue ? Colors.primary : Colors.white} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.extraButton}>
-          <Ionicons name="ellipsis-horizontal" size={20} color={Colors.white} />
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity style={styles.controlButton} onPress={handleSkipForward}>
+            <Ionicons name="play-skip-forward" size={28} color={Colors.white} />
+          </TouchableOpacity>
 
-      {/* Tip Button */}
-      <TouchableOpacity
-        style={styles.tipButton}
-        onPress={() => haptics.success()}
-      >
-        <Ionicons name="gift" size={20} color={Colors.gold} />
-        <Text style={styles.tipText}>Tip DJ</Text>
-      </TouchableOpacity>
-
-      {/* Queue List */}
-      {showQueue && (
-        <View style={styles.queueContainer}>
-          <View style={styles.queueHeader}>
-            <Text style={styles.queueTitle}>Up Next</Text>
-            <Text style={styles.queueCount}>{audio.queue.length} songs</Text>
-          </View>
-          <View style={styles.queueList}>
-            {audio.queue.map((song, index) => (
-              <TouchableOpacity
-                key={song.id + '-' + index}
-                style={[styles.queueItem, index === audio.currentIndex && styles.queueItemActive]}
-                onPress={() => { haptics.selection(); audio.playSongAtIndex(index); }}
-              >
-                <Image source={{ uri: song.coverImage }} style={styles.queueItemImage} />
-                <View style={styles.queueItemInfo}>
-                  <Text style={[styles.queueItemTitle, index === audio.currentIndex && styles.queueItemTitleActive]} numberOfLines={1}>
-                    {song.title}
-                  </Text>
-                  <Text style={styles.queueItemArtist} numberOfLines={1}>
-                    {song.artist?.name || 'Unknown'}
-                  </Text>
-                </View>
-                {index === audio.currentIndex && (
-                  <Ionicons name="musical-note" size={16} color={Colors.primary} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
+          <TouchableOpacity
+            onPress={() => {
+              haptics.selection();
+              setRepeatMode(repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off');
+            }}
+            style={styles.controlButton}
+          >
+            <Ionicons
+              name={repeatMode === 'one' ? 'repeat' : 'repeat-outline'}
+              size={22}
+              color={repeatMode !== 'off' ? Colors.primary : Colors.textSecondary}
+            />
+            {repeatMode === 'one' && (
+              <Text style={styles.repeatBadge}>1</Text>
+            )}
+          </TouchableOpacity>
         </View>
-      )}
-    </View>
+
+        {/* Extra Controls */}
+        <View style={styles.extraControls}>
+          <TouchableOpacity style={styles.extraButton}>
+            <Ionicons name="airplane" size={20} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.extraButton}>
+            <Ionicons name="chatbubble-ellipses-outline" size={20} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.extraButton} onPress={() => { haptics.selection(); setShowQueue(!showQueue); }}>
+            <Ionicons name="list" size={20} color={showQueue ? Colors.primary : Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.extraButton}>
+            <Ionicons name="ellipsis-horizontal" size={20} color={Colors.white} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Tip Button */}
+        <TouchableOpacity
+          style={styles.tipButton}
+          onPress={() => haptics.success()}
+        >
+          <Ionicons name="gift" size={20} color={Colors.gold} />
+          <Text style={styles.tipText}>Tip DJ</Text>
+        </TouchableOpacity>
+
+        {/* Queue List */}
+        {showQueue && (
+          <View style={styles.queueContainer}>
+            <View style={styles.queueHeader}>
+              <Text style={styles.queueTitle}>Up Next</Text>
+              <Text style={styles.queueCount}>{audio.queue.length} songs</Text>
+            </View>
+            <ScrollView style={styles.queueList} showsVerticalScrollIndicator={false}>
+              {audio.queue.map((song, index) => (
+                <QueueItem key={song.id + '-' + index} song={song} index={index} />
+              ))}
+            </ScrollView>
+            <View style={styles.queueHint}>
+              <Ionicons name="swap-vertical" size={14} color={Colors.textTertiary} />
+              <Text style={styles.queueHintText}>Drag to reorder • Swipe left to delete</Text>
+            </View>
+          </View>
+        )}
+      </View>
+    </GestureHandlerRootView>
   );
 };
 
@@ -617,7 +769,7 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
   },
   queueList: {
-    maxHeight: 200,
+    maxHeight: 250,
   },
   queueItem: {
     flexDirection: 'row',
@@ -626,9 +778,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm,
     borderRadius: BorderRadius.sm,
     marginBottom: Spacing.xs,
+    backgroundColor: 'transparent',
   },
   queueItemActive: {
     backgroundColor: Colors.primary + '20',
+  },
+  queueItemDragging: {
+    backgroundColor: Colors.primary + '30',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  dragHandle: {
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: Spacing.xs,
   },
   queueItemImage: {
     width: 40,
@@ -652,5 +820,50 @@ const styles = StyleSheet.create({
     ...Typography.caption,
     color: Colors.textTertiary,
     marginTop: 2,
+  },
+  nowPlayingIndicator: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.primary + '20',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: Spacing.sm,
+  },
+  queuePlayButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.backgroundHighlight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: Spacing.sm,
+  },
+  deleteAction: {
+    backgroundColor: Colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 80,
+    height: QUEUE_ITEM_HEIGHT,
+    borderRadius: BorderRadius.sm,
+    marginBottom: Spacing.xs,
+    flexDirection: 'row',
+    gap: Spacing.xs,
+  },
+  deleteActionText: {
+    color: Colors.white,
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  queueHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: Spacing.md,
+    gap: Spacing.xs,
+  },
+  queueHintText: {
+    ...Typography.caption,
+    color: Colors.textTertiary,
   },
 });

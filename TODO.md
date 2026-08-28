@@ -89,10 +89,16 @@
 - [x] `playSongAtIndex` fixed — uses real `audioUrl` from queue
 - [x] Queue refs synced for auto-next logic
 
-### Priority 3: Queue UI Improvements 🟡 MEDIUM
-- [ ] Drag and drop to reorder songs
-- [ ] Swipe to delete from queue
-- [ ] Queue persistence (save queue when app closes)
+### Priority 3: Queue UI Improvements ✅ (August 28, 2026)
+- [x] Swipe left to delete song from queue
+- [x] Drag-and-drop to reorder songs in queue
+- [x] `reorderQueue` method added to AudioContext
+- [x] Drag handle icon on each queue item
+- [x] Visual feedback during drag (scale + elevation)
+- [x] currentIndex properly updates after reorder
+- [x] Queue wrapped in `GestureHandlerRootView`
+- [x] Queue hint text added ("Drag to reorder • Swipe left to delete")
+- [ ] Queue persistence (save queue when app closes) — TODO
 
 ### Priority 4: Push Notifications 🟠 LOW
 - [ ] Expo Notifications setup
