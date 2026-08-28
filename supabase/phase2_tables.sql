@@ -1,8 +1,5 @@
 -- ==================== PHASE 2 TABLES ====================
--- Ye SQL Supabase SQL Editor mein run karo
--- Dashboard: https://supabase.com/dashboard/project/foedmmpuojcrbesldvyk
--- 
--- NOTE: Agar tables pehle se hain toh ye automatically skip ho jayenge
+
 
 -- ==================== 1. USER_LIKES TABLE ====================
 CREATE TABLE IF NOT EXISTS user_likes (
@@ -90,7 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
 
 
 -- ==================== 4. SONGS TABLE COLUMNS ADD KARO ====================
--- Agar column pehle se hai toh automatically skip hoga
+
 ALTER TABLE songs ADD COLUMN IF NOT EXISTS is_exclusive BOOLEAN DEFAULT FALSE;
 ALTER TABLE songs ADD COLUMN IF NOT EXISTS likes_count INTEGER DEFAULT 0;
 ALTER TABLE songs ADD COLUMN IF NOT EXISTS is_liked BOOLEAN DEFAULT FALSE;

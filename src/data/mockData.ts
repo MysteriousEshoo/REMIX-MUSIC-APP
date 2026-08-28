@@ -28,6 +28,8 @@ export interface Mix {
   genre: string;
   uploadedAt: string;
   isExclusive: boolean;
+  audioUrl?: string;
+  description?: string;
 }
 
 export interface Playlist {

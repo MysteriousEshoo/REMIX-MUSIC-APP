@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { Mix } from '../../data/mockData';
 import { formatDuration } from '../../utils/helpers';
-import { useAudioPlayer } from '../../hooks/useAudioPlayer';
+import { useAudioContext } from '../../contexts/AudioContext';
 import { useLikeSong } from '../../hooks/useLikeSong';
 import { haptics } from '../../utils/haptics';
 
@@ -29,8 +29,9 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
   const [isShuffled, setIsShuffled] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>('off');
 
-  const audio = useAudioPlayer();
+  const audio = useAudioContext();
   const { isLiked, likeSong, statusChecked } = useLikeSong(mix?.id || '');
+  const [showQueue, setShowQueue] = useState(false);
 
   // Vinyl rotation animation
   const vinylRotation = useRef(new Animated.Value(0)).current;
@@ -59,10 +60,24 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
     };
   }, [audio.isPlaying]);
 
-  // Load audio when mix changes
+  // Load audio when mix changes + find position in queue
   useEffect(() => {
-    if (mix?.coverImage) {
-      audio.loadAndPlay('https://example.com/mock-audio.mp3');
+    if (mix) {
+      // Find this mix in the queue
+      const queueIndex = audio.queue.findIndex(q => q.id === mix.id);
+      if (queueIndex >= 0) {
+        // Already in queue — set currentIndex
+        audio.setCurrentMix(mix);
+      } else {
+        // Not in queue — add it and set as current
+        if (audio.queue.length === 0) {
+          audio.setQueue([mix]);
+        } else {
+          audio.addToQueue(mix);
+        }
+        audio.setCurrentMix(mix);
+      }
+      audio.loadAndPlay(mix, mix.audioUrl || 'https://example.com/mock-audio.mp3');
     }
   }, [mix?.id]);
 
@@ -110,13 +125,13 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
 
   const handleSkipBack = useCallback(() => {
     haptics.light();
-    audio.seek(Math.max(0, audio.currentTime - 15));
-  }, [audio.seek, audio.currentTime]);
+    audio.playPrevious();
+  }, [audio.playPrevious]);
 
   const handleSkipForward = useCallback(() => {
     haptics.light();
-    audio.seek(Math.min(audio.duration, audio.currentTime + 15));
-  }, [audio.seek, audio.currentTime, audio.duration]);
+    audio.playNext();
+  }, [audio.playNext]);
 
   if (!mix) return null;
 
@@ -272,8 +287,8 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
         <TouchableOpacity style={styles.extraButton}>
           <Ionicons name="chatbubble-ellipses-outline" size={20} color={Colors.white} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.extraButton}>
-          <Ionicons name="list" size={20} color={Colors.white} />
+        <TouchableOpacity style={styles.extraButton} onPress={() => { haptics.selection(); setShowQueue(!showQueue); }}>
+          <Ionicons name="list" size={20} color={showQueue ? Colors.primary : Colors.white} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.extraButton}>
           <Ionicons name="ellipsis-horizontal" size={20} color={Colors.white} />
@@ -288,6 +303,38 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
         <Ionicons name="gift" size={20} color={Colors.gold} />
         <Text style={styles.tipText}>Tip DJ</Text>
       </TouchableOpacity>
+
+      {/* Queue List */}
+      {showQueue && (
+        <View style={styles.queueContainer}>
+          <View style={styles.queueHeader}>
+            <Text style={styles.queueTitle}>Up Next</Text>
+            <Text style={styles.queueCount}>{audio.queue.length} songs</Text>
+          </View>
+          <View style={styles.queueList}>
+            {audio.queue.map((song, index) => (
+              <TouchableOpacity
+                key={song.id + '-' + index}
+                style={[styles.queueItem, index === audio.currentIndex && styles.queueItemActive]}
+                onPress={() => { haptics.selection(); audio.playSongAtIndex(index); }}
+              >
+                <Image source={{ uri: song.coverImage }} style={styles.queueItemImage} />
+                <View style={styles.queueItemInfo}>
+                  <Text style={[styles.queueItemTitle, index === audio.currentIndex && styles.queueItemTitleActive]} numberOfLines={1}>
+                    {song.title}
+                  </Text>
+                  <Text style={styles.queueItemArtist} numberOfLines={1}>
+                    {song.artist?.name || 'Unknown'}
+                  </Text>
+                </View>
+                {index === audio.currentIndex && (
+                  <Ionicons name="musical-note" size={16} color={Colors.primary} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
     </View>
   );
 };
@@ -548,5 +595,62 @@ const styles = StyleSheet.create({
   tipText: {
     ...Typography.button,
     color: Colors.gold,
+  },
+
+  // Queue
+  queueContainer: {
+    paddingHorizontal: Spacing.xxl,
+    paddingBottom: Spacing.xxl,
+  },
+  queueHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+  },
+  queueTitle: {
+    ...Typography.h4,
+    color: Colors.white,
+  },
+  queueCount: {
+    ...Typography.caption,
+    color: Colors.textTertiary,
+  },
+  queueList: {
+    maxHeight: 200,
+  },
+  queueItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.sm,
+    marginBottom: Spacing.xs,
+  },
+  queueItemActive: {
+    backgroundColor: Colors.primary + '20',
+  },
+  queueItemImage: {
+    width: 40,
+    height: 40,
+    borderRadius: BorderRadius.sm,
+    marginRight: Spacing.md,
+  },
+  queueItemInfo: {
+    flex: 1,
+  },
+  queueItemTitle: {
+    ...Typography.body,
+    color: Colors.textSecondary,
+    fontWeight: '500',
+  },
+  queueItemTitleActive: {
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  queueItemArtist: {
+    ...Typography.caption,
+    color: Colors.textTertiary,
+    marginTop: 2,
   },
 });

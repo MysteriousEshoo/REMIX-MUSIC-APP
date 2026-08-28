@@ -19,6 +19,7 @@ import { getGreeting } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { useAudioContext } from '../../contexts/AudioContext';
 
 const MODE_STORAGE_KEY = '@remix_user_mode';
 const { width } = Dimensions.get('window');
@@ -72,6 +73,7 @@ interface CreatorStats {
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const { user } = useAuth();
+  const { setQueue, setCurrentMix } = useAudioContext();
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedChip, setSelectedChip] = useState('All');
@@ -237,6 +239,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           genre: song.genre || 'Electronic',
           uploadedAt: song.created_at,
           isExclusive: song.is_exclusive || false,
+          audioUrl: song.audio_url || '',
+          description: song.description || '',
         }));
         setSongs(formattedSongs);
       } else {
@@ -292,6 +296,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           genre: song.genre || 'Electronic',
           uploadedAt: song.created_at,
           isExclusive: song.is_exclusive || false,
+          audioUrl: song.audio_url || '',
+          description: song.description || '',
         }));
         setSongs(formattedSongs);
       }
@@ -390,8 +396,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     fetchAllData().then(() => setRefreshing(false));
   }, []);
 
-  // Jab genre chip change ho
+  // Jab koi song play ho — queue set karo with visible songs
+  const handlePlaySong = useCallback((mix: Mix) => {
+    haptics.light();
+    // Set queue with all visible songs
+    const visibleSongs = songs.length > 0 ? songs : [mix];
+    setQueue(visibleSongs);
+    setCurrentMix(mix);
+    navigation.navigate('Player', { mix });
+  }, [songs, navigation, setQueue, setCurrentMix]);
+
+  // Jab genre chip change ho — SIRF LISTENER MODE KE LIYE
   useEffect(() => {
+    if (isCreatorMode) return; // Creator ko genre chips nahi chahiye
     setIsLoading(true);
     if (selectedChip === 'All') {
       fetchSongs().then(() => setIsLoading(false));
@@ -415,6 +432,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   };
 
   // ========== CREATOR MODE HOME ==========
+  // Sirf creator-specific content: Stats, Upload, My Uploads, Earnings
+  // Koi bhi doosron ke mixes nahi dikhenge
   const renderCreatorHome = () => (
     <>
       {/* Creator Stats Dashboard */}
@@ -455,75 +474,37 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
-      {/* Genre Chips */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.chipsContainer}
-        contentContainerStyle={styles.chipsContent}
-      >
-        {chips.map((chip) => (
-          <TouchableOpacity
-            key={chip}
-            style={[styles.chip, selectedChip === chip && styles.chipActive]}
-            onPress={() => { haptics.selection(); setSelectedChip(chip); }}
-          >
-            <Text style={[styles.chipText, selectedChip === chip && styles.chipTextActive]}>
-              {chip}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Trending in Your Genre */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>🔥 Trending in Your Genre</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Search', { filter: 'trending' })}>
-            <Text style={styles.seeAll}>See All</Text>
-          </TouchableOpacity>
-        </View>
-        <FlatList
-          horizontal
-          data={trendingMixes}
-          keyExtractor={item => item.id}
-          renderItem={({ item, index }) => (
-            <AnimatedListItem index={index} delay={100}>
-              <MixCard
-                mix={item}
-                onPress={() => navigation.navigate('Player', { mix: item })}
-                onPlay={() => navigation.navigate('Player', { mix: item })}
-                onLike={() => handleLikeFromHome(item.id)}
-              />
-            </AnimatedListItem>
-          )}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalList}
-        />
-      </View>
-
       {/* Your Recent Uploads */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>📁 Your Recent Uploads</Text>
-          <TouchableOpacity>
-            <Text style={styles.seeAll}>Manage</Text>
+          <Text style={styles.sectionTitle}>📁 Your Uploads</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('CreatorDashboard')}>
+            <Text style={styles.seeAll}>View All</Text>
           </TouchableOpacity>
         </View>
-        {songs.filter(s => s.artist.id === user?.id).slice(0, 3).length > 0 ? (
-          songs.filter(s => s.artist.id === user?.id).slice(0, 3).map((mix, index) => (
-            <AnimatedListItem key={mix.id} index={index} delay={300}>
+        {songs.filter(s => s.artist.id === user?.id).length > 0 ? (
+          songs.filter(s => s.artist.id === user?.id).slice(0, 5).map((mix, index) => (
+            <AnimatedListItem key={mix.id} index={index} delay={200}>
               <MixCard
                 variant="horizontal"
                 mix={mix}
-                onPress={() => navigation.navigate('Player', { mix })}
-                onPlay={() => navigation.navigate('Player', { mix })}
+                onPress={() => handlePlaySong(mix)}
+                onPlay={() => handlePlaySong(mix)}
               />
             </AnimatedListItem>
           ))
         ) : (
           <View style={styles.emptySection}>
-            <Text style={styles.emptyText}>No uploads yet. Start sharing your mixes!</Text>
+            <Ionicons name="cloud-upload-outline" size={48} color={Colors.textTertiary} />
+            <Text style={styles.emptyTitle}>No uploads yet</Text>
+            <Text style={styles.emptyText}>Share your first mix with the world!</Text>
+            <TouchableOpacity
+              style={styles.emptyUploadButton}
+              onPress={() => { haptics.light(); navigation.navigate('Upload'); }}
+            >
+              <Ionicons name="add" size={18} color={Colors.white} />
+              <Text style={styles.emptyUploadButtonText}>Upload Now</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -556,6 +537,34 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             onPress={() => navigation.navigate('CreatorDashboard')}
           >
             <Text style={styles.withdrawButtonText}>View Dashboard</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Quick Actions */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>⚡ Quick Actions</Text>
+        <View style={styles.quickActionsGrid}>
+          <TouchableOpacity
+            style={styles.quickActionCard}
+            onPress={() => { haptics.light(); navigation.navigate('CreatorDashboard'); }}
+          >
+            <Ionicons name="bar-chart" size={28} color={Colors.primary} />
+            <Text style={styles.quickActionText}>Analytics</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickActionCard}
+            onPress={() => { haptics.light(); navigation.navigate('Notifications'); }}
+          >
+            <Ionicons name="notifications" size={28} color={Colors.info} />
+            <Text style={styles.quickActionText}>Notifications</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickActionCard}
+            onPress={() => { haptics.light(); navigation.navigate('Settings'); }}
+          >
+            <Ionicons name="settings" size={28} color={Colors.textSecondary} />
+            <Text style={styles.quickActionText}>Settings</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -603,8 +612,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
                 <MixCard
                   variant="featured"
                   mix={item}
-                  onPress={() => navigation.navigate('Player', { mix: item })}
-                  onPlay={() => navigation.navigate('Player', { mix: item })}
+                  onPress={() => handlePlaySong(item)}
+                  onPlay={() => handlePlaySong(item)}
                 />
               </AnimatedListItem>
             )}
@@ -634,8 +643,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <AnimatedListItem index={index} delay={200}>
               <MixCard
                 mix={item}
-                onPress={() => navigation.navigate('Player', { mix: item })}
-                onPlay={() => navigation.navigate('Player', { mix: item })}
+                onPress={() => handlePlaySong(item)}
+                onPlay={() => handlePlaySong(item)}
                 onLike={() => handleLikeFromHome(item.id)}
               />
             </AnimatedListItem>
@@ -658,8 +667,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <MixCard
               variant="horizontal"
               mix={mix}
-              onPress={() => navigation.navigate('Player', { mix })}
-              onPlay={() => navigation.navigate('Player', { mix })}
+              onPress={() => handlePlaySong(mix)}
+              onPlay={() => handlePlaySong(mix)}
             />
           </AnimatedListItem>
         ))}
@@ -682,7 +691,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
               <MixCard
                 variant="compact"
                 mix={item}
-                onPress={() => navigation.navigate('Player', { mix: item })}
+                onPress={() => handlePlaySong(item)}
               />
             </AnimatedListItem>
           )}
@@ -911,9 +920,30 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.xxl,
     alignItems: 'center',
   },
+  emptyTitle: {
+    ...Typography.h3,
+    color: Colors.textSecondary,
+    marginTop: Spacing.md,
+  },
   emptyText: {
     ...Typography.body,
     color: Colors.textTertiary,
+    marginTop: Spacing.sm,
+    textAlign: 'center',
+  },
+  emptyUploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    marginTop: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  emptyUploadButtonText: {
+    ...Typography.button,
+    color: Colors.white,
   },
   // Creator Stats Grid
   statsGrid: {
@@ -1001,5 +1031,23 @@ const styles = StyleSheet.create({
   withdrawButtonText: {
     ...Typography.button,
     color: Colors.gold,
+  },
+  // Quick Actions
+  quickActionsGrid: {
+    flexDirection: 'row',
+    paddingHorizontal: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  quickActionCard: {
+    flex: 1,
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  quickActionText: {
+    ...Typography.bodySmall,
+    fontWeight: '600',
   },
 });

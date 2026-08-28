@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,14 +6,16 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
-import { MixCard, Button } from '../../components';
-import { mockMixes } from '../../data/mockData';
+import { MixCard } from '../../components';
+import { Mix } from '../../data/mockData';
 import { formatNumber } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
+import { useFollowDJ } from '../../hooks/useFollowDJ';
+import { supabase } from '../../config/supabase';
 
 interface DJProfileScreenProps {
   navigation: any;
@@ -22,17 +24,104 @@ interface DJProfileScreenProps {
 
 export const DJProfileScreen: React.FC<DJProfileScreenProps> = ({ navigation, route }) => {
   const dj = route?.params?.dj;
-  const [isFollowing, setIsFollowing] = useState(dj?.isFollowing || false);
+  const djId = dj?.id || dj?.handle || '';
+  
+  // useFollowDJ hook — Supabase se follow/unfollow
+  const { isFollowing, followerCount, loading: followLoading, toggleFollow, fetchFollowerCount } = useFollowDJ(djId);
 
-  const djMixes = mockMixes.filter(m => m.artist.id === dj?.id);
-  const allMixes = djMixes.length > 0 ? djMixes : mockMixes.slice(0, 4);
+  const [djMixes, setDjMixes] = useState<Mix[]>([]);
+  const [isLoadingMixes, setIsLoadingMixes] = useState(true);
+  const [totalFollowers, setTotalFollowers] = useState(dj?.followers || 0);
+
+  // Fetch follower count on mount
+  useEffect(() => {
+    if (djId) {
+      fetchFollowerCount();
+    }
+  }, [djId]);
+
+  // Update total followers from hook
+  useEffect(() => {
+    if (followerCount > 0) {
+      setTotalFollowers(followerCount);
+    }
+  }, [followerCount]);
+
+  // Fetch DJ's songs from Supabase
+  useEffect(() => {
+    fetchDjMixes();
+  }, [djId]);
+
+  const fetchDjMixes = async () => {
+    setIsLoadingMixes(true);
+    try {
+      if (!djId) {
+        setDjMixes([]);
+        setIsLoadingMixes(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('songs')
+        .select('*')
+        .eq('uploaded_by', djId)
+        .order('created_at', { ascending: false });
+
+      if (error || !data || data.length === 0) {
+        setDjMixes([]);
+      } else {
+        const formatted: Mix[] = data.map((song: any) => ({
+          id: song.id,
+          title: song.title,
+          artist: {
+            id: song.uploaded_by || djId,
+            name: song.artist || dj?.name || 'Unknown',
+            handle: dj?.handle || '@unknown',
+            avatar: dj?.avatar || 'https://picsum.photos/seed/unknown/200/200',
+            bio: dj?.bio || '',
+            followers: totalFollowers,
+            mixes: data.length,
+            isVerified: dj?.isVerified || false,
+            totalEarnings: dj?.totalEarnings || 0,
+            genre: song.genre || 'Electronic',
+            isFollowing,
+          },
+          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
+          duration: song.duration || 0,
+          plays: song.plays_count || 0,
+          likes: song.likes_count || 0,
+          isLiked: false,
+          isDownloaded: song.is_downloaded || false,
+          genre: song.genre || 'Electronic',
+          uploadedAt: song.created_at,
+          isExclusive: song.is_exclusive || false,
+          audioUrl: song.audio_url || '',
+          description: song.description || '',
+        }));
+        setDjMixes(formatted);
+      }
+    } catch (err) {
+      setDjMixes([]);
+    } finally {
+      setIsLoadingMixes(false);
+    }
+  };
+
+  const handleFollowToggle = useCallback(async () => {
+    haptics.medium();
+    await toggleFollow();
+    // Update follower count locally
+    setTotalFollowers((prev: number) => isFollowing ? prev - 1 : prev + 1);
+  }, [toggleFollow, isFollowing]);
+
+  if (!dj) return null;
 
   return (
     <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Hero Section */}
         <View style={styles.hero}>
-          <Image source={{ uri: dj?.avatar }} style={styles.heroImage} />
+          <Image source={{ uri: dj.avatar }} style={styles.heroImage} />
           <View style={styles.heroOverlay} />
           
           {/* Back button */}
@@ -49,8 +138,8 @@ export const DJProfileScreen: React.FC<DJProfileScreenProps> = ({ navigation, ro
         {/* Profile Info */}
         <View style={styles.profileInfo}>
           <View style={styles.avatarContainer}>
-            <Image source={{ uri: dj?.avatar }} style={styles.avatar} />
-            {dj?.isVerified && (
+            <Image source={{ uri: dj.avatar }} style={styles.avatar} />
+            {dj.isVerified && (
               <View style={styles.verifiedBadge}>
                 <Ionicons name="checkmark" size={12} color={Colors.white} />
               </View>
@@ -58,25 +147,25 @@ export const DJProfileScreen: React.FC<DJProfileScreenProps> = ({ navigation, ro
           </View>
 
           <View style={styles.nameRow}>
-            <Text style={styles.djName}>{dj?.name}</Text>
+            <Text style={styles.djName}>{dj.name}</Text>
           </View>
-          <Text style={styles.handle}>{dj?.handle}</Text>
-          <Text style={styles.genre}>{dj?.genre}</Text>
+          <Text style={styles.handle}>{dj.handle}</Text>
+          <Text style={styles.genre}>{dj.genre}</Text>
 
           {/* Stats */}
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{formatNumber(dj?.followers || 0)}</Text>
+              <Text style={styles.statValue}>{formatNumber(totalFollowers)}</Text>
               <Text style={styles.statLabel}>Followers</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{dj?.mixes || 0}</Text>
+              <Text style={styles.statValue}>{djMixes.length}</Text>
               <Text style={styles.statLabel}>Mixes</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>${formatNumber(dj?.totalEarnings || 0)}</Text>
+              <Text style={styles.statValue}>${formatNumber(dj.totalEarnings || 0)}</Text>
               <Text style={styles.statLabel}>Earned</Text>
             </View>
           </View>
@@ -85,11 +174,16 @@ export const DJProfileScreen: React.FC<DJProfileScreenProps> = ({ navigation, ro
           <View style={styles.actionRow}>
             <TouchableOpacity
               style={[styles.followButton, isFollowing && styles.followingButton]}
-              onPress={() => { haptics.medium(); setIsFollowing(!isFollowing); }}
+              onPress={handleFollowToggle}
+              disabled={followLoading}
             >
-              <Text style={[styles.followText, isFollowing && styles.followingText]}>
-                {isFollowing ? 'Following' : 'Follow'}
-              </Text>
+              {followLoading ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Text style={[styles.followText, isFollowing && styles.followingText]}>
+                  {isFollowing ? 'Following' : 'Follow'}
+                </Text>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.tipButton}>
@@ -103,7 +197,7 @@ export const DJProfileScreen: React.FC<DJProfileScreenProps> = ({ navigation, ro
           </View>
 
           {/* Bio */}
-          <Text style={styles.bio}>{dj?.bio}</Text>
+          <Text style={styles.bio}>{dj.bio}</Text>
         </View>
 
         {/* Latest Mix */}
@@ -111,24 +205,24 @@ export const DJProfileScreen: React.FC<DJProfileScreenProps> = ({ navigation, ro
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Latest Mix</Text>
           </View>
-          {allMixes.length > 0 && (
+          {djMixes.length > 0 && (
             <View style={styles.latestMix}>
               <TouchableOpacity
                 style={styles.latestMixContent}
-                onPress={() => navigation.navigate('Player', { mix: allMixes[0] })}
+                onPress={() => navigation.navigate('Player', { mix: djMixes[0] })}
               >
-                <Image source={{ uri: allMixes[0].coverImage }} style={styles.latestMixImage} />
+                <Image source={{ uri: djMixes[0].coverImage }} style={styles.latestMixImage} />
                 <View style={styles.latestMixInfo}>
                   <Text style={styles.latestMixTitle} numberOfLines={2}>
-                    {allMixes[0].title}
+                    {djMixes[0].title}
                   </Text>
                   <Text style={styles.latestMixMeta}>
-                    {formatNumber(allMixes[0].plays)} plays · {allMixes[0].uploadedAt}
+                    {formatNumber(djMixes[0].plays)} plays
                   </Text>
                 </View>
                 <TouchableOpacity
                   style={styles.latestPlayButton}
-                  onPress={() => navigation.navigate('Player', { mix: allMixes[0] })}
+                  onPress={() => navigation.navigate('Player', { mix: djMixes[0] })}
                 >
                   <Ionicons name="play" size={24} color={Colors.white} />
                 </TouchableOpacity>
@@ -141,17 +235,23 @@ export const DJProfileScreen: React.FC<DJProfileScreenProps> = ({ navigation, ro
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>All Mixes</Text>
-            <Text style={styles.mixCount}>{allMixes.length} mixes</Text>
+            <Text style={styles.mixCount}>{djMixes.length} mixes</Text>
           </View>
-          {allMixes.map((mix) => (
-            <MixCard
-              key={mix.id}
-              variant="horizontal"
-              mix={mix}
-              onPress={() => navigation.navigate('Player', { mix })}
-              onPlay={() => navigation.navigate('Player', { mix })}
-            />
-          ))}
+          {isLoadingMixes ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : (
+            djMixes.map((mix) => (
+              <MixCard
+                key={mix.id}
+                variant="horizontal"
+                mix={mix}
+                onPress={() => navigation.navigate('Player', { mix })}
+                onPlay={() => navigation.navigate('Player', { mix })}
+              />
+            ))
+          )}
         </View>
 
         <View style={{ height: 120 }} />
@@ -381,5 +481,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: Spacing.md,
+  },
+  loadingContainer: {
+    paddingVertical: Spacing.xxl,
+    alignItems: 'center',
   },
 });

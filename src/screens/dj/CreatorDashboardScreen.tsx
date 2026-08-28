@@ -1,47 +1,179 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
-import { CoinCard, CoinTransactionItem } from '../../components';
-import { mockCoinTransactions } from '../../data/mockData';
 import { formatNumber, formatCurrency } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
+import { supabase } from '../../config/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface CreatorDashboardScreenProps {
   navigation: any;
 }
 
-export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ navigation }) => {
-  const [period, setPeriod] = useState<'week' | 'month' | 'all'>('month');
+interface CreatorAnalytics {
+  totalPlays: number;
+  activeListeners: number;
+  avgListenTime: string;
+  followerGrowth: number;
+  coinsEarned: number;
+  estimatedEarnings: number;
+  totalMixes: number;
+  totalLikes: number;
+  totalFollowers: number;
+  recentPlays: number;
+}
 
-  const analytics = {
-    totalPlays: 245000,
-    activeListeners: 12400,
-    avgListenTime: '18:32',
-    followerGrowth: '+342',
-    coinsEarned: 12450,
-    estimatedEarnings: 124.50,
+export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ navigation }) => {
+  const { user } = useAuth();
+  const [period, setPeriod] = useState<'week' | 'month' | 'all'>('month');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [analytics, setAnalytics] = useState<CreatorAnalytics>({
+    totalPlays: 0,
+    activeListeners: 0,
+    avgListenTime: '0:00',
+    followerGrowth: 0,
+    coinsEarned: 0,
+    estimatedEarnings: 0,
+    totalMixes: 0,
+    totalLikes: 0,
+    totalFollowers: 0,
+    recentPlays: 0,
+  });
+
+  const [listenerData, setListenerData] = useState<{ day: string; value: number }[]>([]);
+
+  useEffect(() => {
+    fetchAnalytics();
+  }, [period]);
+
+  const fetchAnalytics = async () => {
+    if (!user) {
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      // Parallel mein sab data fetch karo
+      const [songsResult, followersResult, likesOnMySongsResult] = await Promise.all([
+        // 1. User ki saari uploads
+        supabase
+          .from('songs')
+          .select('id, plays_count, likes_count, created_at')
+          .eq('uploaded_by', user.id),
+
+        // 2. User ke followers count
+        supabase
+          .from('user_follows')
+          .select('id', { count: 'exact', head: true })
+          .eq('dj_id', user.id),
+
+        // 3. Mere songs pe total likes
+        supabase
+          .from('songs')
+          .select('likes_count')
+          .eq('uploaded_by', user.id),
+      ]);
+
+      const songs = songsResult.data || [];
+      const followerCount = followersResult.count || 0;
+      const totalLikes = likesOnMySongsResult.data?.reduce((sum, s) => sum + (s.likes_count || 0), 0) || 0;
+
+      // Total plays
+      const totalPlays = songs.reduce((sum, s) => sum + (s.plays_count || 0), 0);
+
+      // Period filter karo
+      const now = new Date();
+      let periodStart: Date;
+      if (period === 'week') {
+        periodStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      } else if (period === 'month') {
+        periodStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      } else {
+        periodStart = new Date(0); // All time
+      }
+
+      const periodSongs = songs.filter(s => new Date(s.created_at) >= periodStart);
+      const recentPlays = periodSongs.reduce((sum, s) => sum + (s.plays_count || 0), 0);
+
+      // Simulated data (yeh baad mein real analytics table se aayega)
+      const activeListeners = Math.floor(totalPlays * 0.05); // 5% of plays = active listeners
+      const avgListenMinutes = 15 + Math.floor(Math.random() * 20);
+      const avgListenSeconds = Math.floor(Math.random() * 60);
+
+      // Coins: 1 play = 1 coin (simplified)
+      const coinsEarned = totalPlays;
+      const estimatedEarnings = (coinsEarned * 0.001).toFixed(2); // $0.001 per coin
+
+      // Generate weekly listener data
+      const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const baseValue = recentPlays / 7;
+      const weekData = weekDays.map((day, i) => ({
+        day,
+        value: Math.max(0.1, Math.min(1, (baseValue * (0.5 + Math.random())) / (baseValue * 1.2 || 1))),
+      }));
+
+      setListenerData(weekData);
+
+      setAnalytics({
+        totalPlays,
+        activeListeners,
+        avgListenTime: `${avgListenMinutes}:${avgListenSeconds.toString().padStart(2, '0')}`,
+        followerGrowth: Math.floor(followerCount * 0.1), // 10% growth simulation
+        coinsEarned,
+        estimatedEarnings: parseFloat(estimatedEarnings),
+        totalMixes: songs.length,
+        totalLikes,
+        totalFollowers: followerCount,
+        recentPlays,
+      });
+    } catch (err) {
+      console.log('[CreatorDashboard] Error fetching analytics:', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const listenerData = [
-    { day: 'Mon', value: 0.6 },
-    { day: 'Tue', value: 0.8 },
-    { day: 'Wed', value: 0.4 },
-    { day: 'Thu', value: 0.9 },
-    { day: 'Fri', value: 1.0 },
-    { day: 'Sat', value: 0.7 },
-    { day: 'Sun', value: 0.5 },
-  ];
+  const onRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    await fetchAnalytics();
+    setIsRefreshing(false);
+  }, [period]);
+
+  if (isLoading) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={styles.loadingText}>Loading analytics...</Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
+      >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => { haptics.light(); navigation.goBack(); }}>
@@ -55,11 +187,25 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
 
         {/* Coin Balance Card */}
         <View style={styles.section}>
-          <CoinCard
-            balance={12450}
-            totalEarned={45200}
-            onViewHistory={() => {}}
-          />
+          <View style={styles.coinCard}>
+            <View style={styles.coinHeader}>
+              <Ionicons name="diamond" size={28} color={Colors.gold} />
+              <Text style={styles.coinTitle}>Coin Balance</Text>
+            </View>
+            <Text style={styles.coinBalance}>{formatNumber(analytics.coinsEarned)}</Text>
+            <Text style={styles.coinSubtext}>Total coins earned from your mixes</Text>
+            <View style={styles.coinStats}>
+              <View style={styles.coinStatItem}>
+                <Text style={styles.coinStatValue}>${analytics.estimatedEarnings.toFixed(2)}</Text>
+                <Text style={styles.coinStatLabel}>Estimated Value</Text>
+              </View>
+              <View style={styles.coinStatDivider} />
+              <View style={styles.coinStatItem}>
+                <Text style={styles.coinStatValue}>15%</Text>
+                <Text style={styles.coinStatLabel}>Platform Fee</Text>
+              </View>
+            </View>
+          </View>
         </View>
 
         {/* Period Selector */}
@@ -99,9 +245,39 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
             <View style={styles.analyticsCard}>
               <Ionicons name="trending-up" size={20} color={Colors.success} />
               <Text style={[styles.analyticsValue, { color: Colors.success }]}>
-                {analytics.followerGrowth}
+                +{formatNumber(analytics.followerGrowth)}
               </Text>
               <Text style={styles.analyticsLabel}>New Followers</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Content Stats */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Your Content</Text>
+          <View style={styles.contentStatsCard}>
+            <View style={styles.contentStatItem}>
+              <Ionicons name="musical-notes" size={20} color={Colors.primary} />
+              <View style={styles.contentStatInfo}>
+                <Text style={styles.contentStatValue}>{analytics.totalMixes}</Text>
+                <Text style={styles.contentStatLabel}>Total Uploads</Text>
+              </View>
+            </View>
+            <View style={styles.contentStatDivider} />
+            <View style={styles.contentStatItem}>
+              <Ionicons name="heart" size={20} color={Colors.error} />
+              <View style={styles.contentStatInfo}>
+                <Text style={styles.contentStatValue}>{formatNumber(analytics.totalLikes)}</Text>
+                <Text style={styles.contentStatLabel}>Total Likes</Text>
+              </View>
+            </View>
+            <View style={styles.contentStatDivider} />
+            <View style={styles.contentStatItem}>
+              <Ionicons name="people" size={20} color={Colors.info} />
+              <View style={styles.contentStatInfo}>
+                <Text style={styles.contentStatValue}>{formatNumber(analytics.totalFollowers)}</Text>
+                <Text style={styles.contentStatLabel}>Followers</Text>
+              </View>
             </View>
           </View>
         </View>
@@ -137,8 +313,8 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
           <Text style={styles.sectionTitle}>Earnings</Text>
           <View style={styles.earningsCard}>
             <View style={styles.earningsRow}>
-              <Text style={styles.earningsLabel}>Coins This Month</Text>
-              <Text style={styles.earningsValue}>{analytics.coinsEarned.toLocaleString()}</Text>
+              <Text style={styles.earningsLabel}>Coins This Period</Text>
+              <Text style={styles.earningsValue}>{formatNumber(analytics.coinsEarned)}</Text>
             </View>
             <View style={styles.earningsDivider} />
             <View style={styles.earningsRow}>
@@ -163,17 +339,25 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
           </TouchableOpacity>
         </View>
 
-        {/* Recent Transactions */}
+        {/* Quick Actions */}
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Transactions</Text>
-            <TouchableOpacity>
-              <Text style={styles.seeAll}>See All</Text>
+          <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <View style={styles.actionsGrid}>
+            <TouchableOpacity
+              style={styles.actionCard}
+              onPress={() => { haptics.light(); navigation.navigate('Upload'); }}
+            >
+              <Ionicons name="cloud-upload" size={24} color={Colors.primary} />
+              <Text style={styles.actionText}>Upload New Mix</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionCard}
+              onPress={() => { haptics.light(); navigation.navigate('Notifications'); }}
+            >
+              <Ionicons name="notifications" size={24} color={Colors.info} />
+              <Text style={styles.actionText}>Notifications</Text>
             </TouchableOpacity>
           </View>
-          {mockCoinTransactions.map((transaction) => (
-            <CoinTransactionItem key={transaction.id} transaction={transaction} />
-          ))}
         </View>
 
         <View style={{ height: 120 }} />
@@ -206,6 +390,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    ...Typography.body,
+    color: Colors.textSecondary,
+    marginTop: Spacing.md,
+  },
   section: {
     paddingHorizontal: Spacing.xl,
     marginBottom: Spacing.xl,
@@ -214,17 +408,58 @@ const styles = StyleSheet.create({
     ...Typography.h3,
     marginBottom: Spacing.lg,
   },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: Spacing.lg,
+  // Coin Card
+  coinCard: {
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.xl,
   },
-  seeAll: {
-    ...Typography.body,
-    color: Colors.primary,
+  coinHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+    gap: Spacing.sm,
+  },
+  coinTitle: {
+    ...Typography.bodyLarge,
     fontWeight: '600',
   },
+  coinBalance: {
+    ...Typography.h1,
+    color: Colors.gold,
+    marginBottom: Spacing.xs,
+  },
+  coinSubtext: {
+    ...Typography.bodySmall,
+    color: Colors.textTertiary,
+    marginBottom: Spacing.lg,
+  },
+  coinStats: {
+    flexDirection: 'row',
+    backgroundColor: Colors.background,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+  },
+  coinStatItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  coinStatValue: {
+    ...Typography.bodyLarge,
+    fontWeight: '700',
+    color: Colors.gold,
+  },
+  coinStatLabel: {
+    ...Typography.caption,
+    color: Colors.textTertiary,
+    marginTop: 4,
+  },
+  coinStatDivider: {
+    width: 1,
+    backgroundColor: Colors.border,
+    marginVertical: 4,
+  },
+  // Period
   periodContainer: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.xl,
@@ -251,6 +486,7 @@ const styles = StyleSheet.create({
   periodTextActive: {
     color: Colors.white,
   },
+  // Analytics
   analyticsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -271,6 +507,38 @@ const styles = StyleSheet.create({
     ...Typography.bodySmall,
     color: Colors.textTertiary,
   },
+  // Content Stats
+  contentStatsCard: {
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  contentStatItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  contentStatInfo: {
+    flex: 1,
+  },
+  contentStatValue: {
+    ...Typography.h3,
+  },
+  contentStatLabel: {
+    ...Typography.caption,
+    color: Colors.textTertiary,
+    marginTop: 2,
+  },
+  contentStatDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: Colors.border,
+    marginHorizontal: Spacing.sm,
+  },
+  // Chart
   chartCard: {
     backgroundColor: Colors.backgroundElevated,
     borderRadius: BorderRadius.md,
@@ -303,6 +571,7 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     marginTop: Spacing.xs,
   },
+  // Earnings
   earningsCard: {
     backgroundColor: Colors.backgroundElevated,
     borderRadius: BorderRadius.md,
@@ -340,5 +609,22 @@ const styles = StyleSheet.create({
   withdrawText: {
     ...Typography.button,
     color: Colors.white,
+  },
+  // Quick Actions
+  actionsGrid: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  actionCard: {
+    flex: 1,
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  actionText: {
+    ...Typography.bodySmall,
+    fontWeight: '600',
   },
 });

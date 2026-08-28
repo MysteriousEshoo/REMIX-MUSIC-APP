@@ -12,7 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { SearchBar, DJCard, MixCard } from '../../components';
-import { genres, mockDJs, mockMixes, DJ, Mix } from '../../data/mockData';
+import { genres, Mix } from '../../data/mockData';
 import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -166,6 +166,8 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation, route })
           genre: song.genre || 'Electronic',
           uploadedAt: song.created_at,
           isExclusive: song.is_exclusive || false,
+          audioUrl: song.audio_url || '',
+          description: song.description || '',
         }));
         setDbSongs(formatted);
       } else {
@@ -179,27 +181,9 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation, route })
     }
   };
 
-  // Mock data se bhi filter karo (fallback + DJs ke liye)
-  const filteredDJs = searchQuery
-    ? mockDJs.filter(dj =>
-        dj.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        dj.genre.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : [];
-
-  // Database se aaye songs + mock songs dono dikhao
-  const filteredMixes = [
-    ...dbSongs,
-    ...mockMixes.filter(mix =>
-      mix.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      mix.artist.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      mix.genre.toLowerCase().includes(searchQuery.toLowerCase())
-    ),
-  ].filter((mix, index, self) => 
-    index === self.findIndex(m => m.id === mix.id)
-  );  // Duplicate remove karo
-
-  const hasResults = filteredDJs.length > 0 || filteredMixes.length > 0;
+  // Sirf DB se aaye songs dikhao
+  const filteredMixes = dbSongs;
+  const hasResults = filteredMixes.length > 0;
 
   return (
     <View style={styles.container}>
@@ -267,49 +251,23 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({ navigation, route })
               </View>
             </View>
 
-            {/* Popular DJs */}
+            {/* Popular DJs - DB se aayenge */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Popular DJs</Text>
-                <TouchableOpacity>
-                  <Text style={styles.seeAll}>See All</Text>
-                </TouchableOpacity>
+                <Text style={styles.sectionTitle}>Discover Creators</Text>
               </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.horizontalList}
-              >
-                {mockDJs.slice(0, 5).map((dj) => (
-                  <DJCard
-                    key={dj.id}
-                    dj={dj}
-                    variant="top"
-                    index={mockDJs.indexOf(dj)}
-                    onPress={() => navigation.navigate('DJProfile', { dj })}
-                  />
-                ))}
-              </ScrollView>
+              <View style={styles.emptyContainer}>
+                <Ionicons name="people-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No creators yet</Text>
+                <Text style={styles.emptyText}>
+                  Creators who upload mixes will appear here
+                </Text>
+              </View>
             </View>
           </>
         ) : searchQuery ? (
           <Animated.View style={{ opacity: resultOpacity }}>
-            {/* Search Results */}
-            {filteredDJs.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>DJs</Text>
-                {filteredDJs.map((dj) => (
-                  <DJCard
-                    key={dj.id}
-                    dj={dj}
-                    variant="horizontal"
-                    onPress={() => navigation.navigate('DJProfile', { dj })}
-                    onFollow={() => haptics.success()}
-                  />
-                ))}
-              </View>
-            )}
-
+            {/* Search Results — sirf DB se */}
             {filteredMixes.length > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Mixes</Text>

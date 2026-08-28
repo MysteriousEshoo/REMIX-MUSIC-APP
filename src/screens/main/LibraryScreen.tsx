@@ -9,24 +9,36 @@ import {
   RefreshControl,
   Animated,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { MixCard } from '../../components';
-import { mockMixes, mockPlaylists, Mix } from '../../data/mockData';
+import { Mix } from '../../data/mockData';
 import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { useAudioContext } from '../../contexts/AudioContext';
+
+const MODE_STORAGE_KEY = '@remix_user_mode';
 
 interface LibraryScreenProps {
   navigation: any;
   route?: any;
 }
 
-type LibraryTab = 'liked' | 'playlists' | 'downloads';
+type ListenerTab = 'liked' | 'playlists' | 'downloads';
+type CreatorTab = 'uploads' | 'playlists' | 'drafts';
 
 export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route }) => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<LibraryTab>('liked');
+  const { setQueue, setCurrentMix } = useAudioContext();
+  const [isCreatorMode, setIsCreatorMode] = useState(false);
+
+  // Listener tabs
+  const [activeListenerTab, setActiveListenerTab] = useState<ListenerTab>('liked');
+  // Creator tabs
+  const [activeCreatorTab, setActiveCreatorTab] = useState<CreatorTab>('uploads');
+
   const [refreshing, setRefreshing] = useState(false);
   const contentFade = useRef(new Animated.Value(1)).current;
 
@@ -34,82 +46,80 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
   const [likedMixes, setLikedMixes] = useState<Mix[]>([]);
   const [isLoadingLiked, setIsLoadingLiked] = useState(true);
 
-  // Downloads state (abhi mock)
-  const downloadedMixes = mockMixes.filter(m => m.isDownloaded);
+  // Creator uploads state
+  const [myUploads, setMyUploads] = useState<Mix[]>([]);
+  const [isLoadingUploads, setIsLoadingUploads] = useState(true);
 
-  // Jab screen focus ho toh liked songs refresh karo — HAR BAR
+  // Downloads state (real data se aayega)
+  const downloadedMixes: Mix[] = [];
+
+  // Mode load karo
+  useEffect(() => {
+    loadMode();
+  }, []);
+
+  const loadMode = async () => {
+    try {
+      const savedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY);
+      setIsCreatorMode(savedMode === 'creator');
+    } catch (err) {
+      console.log('Error loading mode:', err);
+    }
+  };
+
+  // Jab screen focus ho toh data refresh karo
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      console.log('[LibraryScreen] Screen focused — fetching liked songs');
-      fetchLikedSongs();
+      loadMode();
+      if (isCreatorMode) {
+        fetchMyUploads();
+      } else {
+        fetchLikedSongs();
+      }
     });
     return unsubscribe;
-  }, [navigation, user]);
+  }, [navigation, user, isCreatorMode]);
 
   // Initial load
   useEffect(() => {
-    fetchLikedSongs();
-  }, []);
+    if (isCreatorMode) {
+      fetchMyUploads();
+    } else {
+      fetchLikedSongs();
+    }
+  }, [isCreatorMode]);
 
-  // Liked songs Supabase se fetch karo
+  // ========== LISTENER: Liked Songs ==========
   const fetchLikedSongs = async () => {
     console.log('[LibraryScreen] fetchLikedSongs called, user:', user?.id || 'null');
     setIsLoadingLiked(true);
 
     try {
       if (!user) {
-        console.log('[LibraryScreen] User nahi hai — empty state');
         setLikedMixes([]);
         setIsLoadingLiked(false);
         return;
       }
 
-      // Step 1: user_likes table se liked song IDs nikalo
       const { data: likesData, error: likesError } = await supabase
         .from('user_likes')
         .select('song_id')
         .eq('user_id', user.id);
 
-      console.log('[LibraryScreen] user_likes query result:', {
-        error: likesError?.message,
-        count: likesData?.length,
-        data: likesData,
-      });
-
-      if (likesError) {
-        console.log('[LibraryScreen] ❌ user_likes error:', likesError.message, likesError.code);
+      if (likesError || !likesData || likesData.length === 0) {
         setLikedMixes([]);
         setIsLoadingLiked(false);
         return;
       }
 
-      if (!likesData || likesData.length === 0) {
-        console.log('[LibraryScreen] No liked songs in DB — showing empty');
-        setLikedMixes([]);
-        setIsLoadingLiked(false);
-        return;
-      }
-
-      // Step 2: Song IDs nikalo
       const songIds = likesData.map((like: any) => like.song_id);
-      console.log('[LibraryScreen] Liked song IDs:', songIds);
 
-      // Step 3: Songs ka data fetch karo
       const { data: songsData, error: songsError } = await supabase
         .from('songs')
         .select('*')
         .in('id', songIds);
 
-      console.log('[LibraryScreen] songs query result:', {
-        error: songsError?.message,
-        count: songsData?.length,
-      });
-
-      if (songsError) {
-        console.log('[LibraryScreen] ❌ songs error:', songsError.message, songsError.code);
-        setLikedMixes([]);
-      } else if (!songsData || songsData.length === 0) {
-        console.log('[LibraryScreen] Songs table se data nahi mila for IDs:', songIds);
+      if (songsError || !songsData || songsData.length === 0) {
         setLikedMixes([]);
       } else {
         const formatted: Mix[] = songsData.map((song: any) => ({
@@ -137,32 +147,124 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
           genre: song.genre || 'Electronic',
           uploadedAt: song.created_at,
           isExclusive: song.is_exclusive || false,
+          audioUrl: song.audio_url || '',
+          description: song.description || '',
         }));
-        console.log('[LibraryScreen] ✅ Liked songs loaded:', formatted.length, 'songs');
         setLikedMixes(formatted);
       }
     } catch (err) {
-      console.log('[LibraryScreen] ❌ fetchLikedSongs CATCH:', err);
       setLikedMixes([]);
     } finally {
       setIsLoadingLiked(false);
     }
   };
 
-  const tabs: { key: LibraryTab; label: string; icon: string; count: number }[] = [
+  // ========== CREATOR: My Uploads ==========
+  const fetchMyUploads = async () => {
+    console.log('[LibraryScreen] fetchMyUploads called, user:', user?.id || 'null');
+    setIsLoadingUploads(true);
+
+    try {
+      if (!user) {
+        setMyUploads([]);
+        setIsLoadingUploads(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('songs')
+        .select('*')
+        .eq('uploaded_by', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error || !data || data.length === 0) {
+        setMyUploads([]);
+      } else {
+        const formatted: Mix[] = data.map((song: any) => ({
+          id: song.id,
+          title: song.title,
+          artist: {
+            id: user.id,
+            name: song.artist,
+            handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
+            avatar: 'https://picsum.photos/seed/' + user.id + '/200/200',
+            bio: '',
+            followers: 0,
+            mixes: 0,
+            isVerified: false,
+            totalEarnings: 0,
+            genre: song.genre || 'Electronic',
+            isFollowing: false,
+          },
+          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
+          duration: song.duration || 0,
+          plays: song.plays_count || 0,
+          likes: song.likes_count || 0,
+          isLiked: false,
+          isDownloaded: song.is_downloaded || false,
+          genre: song.genre || 'Electronic',
+          uploadedAt: song.created_at,
+          isExclusive: song.is_exclusive || false,
+          audioUrl: song.audio_url || '',
+          description: song.description || '',
+        }));
+        setMyUploads(formatted);
+      }
+    } catch (err) {
+      setMyUploads([]);
+    } finally {
+      setIsLoadingUploads(false);
+    }
+  };
+
+  // Jab koi song play ho — queue set karo with current list
+  const handlePlaySong = useCallback((mix: Mix) => {
+    haptics.light();
+    const currentList = isCreatorMode ? myUploads : likedMixes;
+    const queueList = currentList.length > 0 ? currentList : [mix];
+    setQueue(queueList);
+    setCurrentMix(mix);
+    navigation.navigate('Player', { mix });
+  }, [isCreatorMode, myUploads, likedMixes, navigation, setQueue, setCurrentMix]);
+
+  // ========== Listener Tabs ==========
+  const listenerTabs: { key: ListenerTab; label: string; icon: string; count: number }[] = [
     { key: 'liked', label: 'Liked', icon: 'heart', count: likedMixes.length },
-    { key: 'playlists', label: 'Playlists', icon: 'list', count: mockPlaylists.length },
+    { key: 'playlists', label: 'Playlists', icon: 'list', count: 0 },
     { key: 'downloads', label: 'Downloads', icon: 'download', count: downloadedMixes.length },
   ];
 
-  const switchTab = useCallback((tab: LibraryTab) => {
+  // ========== Creator Tabs ==========
+  const creatorTabs: { key: CreatorTab; label: string; icon: string; count: number }[] = [
+    { key: 'uploads', label: 'My Uploads', icon: 'cloud-upload', count: myUploads.length },
+    { key: 'playlists', label: 'Playlists', icon: 'list', count: 0 },
+    { key: 'drafts', label: 'Drafts', icon: 'document-text', count: 0 },
+  ];
+
+  const switchListenerTab = useCallback((tab: ListenerTab) => {
     haptics.selection();
     Animated.timing(contentFade, {
       toValue: 0,
       duration: 100,
       useNativeDriver: true,
     }).start(() => {
-      setActiveTab(tab);
+      setActiveListenerTab(tab);
+      Animated.timing(contentFade, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    });
+  }, []);
+
+  const switchCreatorTab = useCallback((tab: CreatorTab) => {
+    haptics.selection();
+    Animated.timing(contentFade, {
+      toValue: 0,
+      duration: 100,
+      useNativeDriver: true,
+    }).start(() => {
+      setActiveCreatorTab(tab);
       Animated.timing(contentFade, {
         toValue: 1,
         duration: 200,
@@ -174,43 +276,292 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     haptics.light();
-    fetchLikedSongs().then(() => setRefreshing(false));
-  }, []);
+    if (isCreatorMode) {
+      fetchMyUploads().then(() => setRefreshing(false));
+    } else {
+      fetchLikedSongs().then(() => setRefreshing(false));
+    }
+  }, [isCreatorMode]);
+
+  // Format number helper
+  const formatNumber = (num: number): string => {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+  };
+
+  // ========== LISTENER MODE RENDER ==========
+  const renderListenerContent = () => (
+    <Animated.View style={[{ flex: 1 }, { opacity: contentFade }]}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
+      >
+        {activeListenerTab === 'liked' && (
+          <View style={styles.content}>
+            <View style={styles.filterRow}>
+              <TouchableOpacity style={styles.filterButton} onPress={() => haptics.selection()}>
+                <Ionicons name="swap-vertical" size={16} color={Colors.textSecondary} />
+                <Text style={styles.filterText}>Recently Added</Text>
+              </TouchableOpacity>
+            </View>
+
+            {isLoadingLiked ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="heart-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>Loading liked songs...</Text>
+              </View>
+            ) : likedMixes.length > 0 ? (
+              likedMixes.map((mix) => (
+                <MixCard
+                  key={mix.id}
+                  variant="horizontal"
+                  mix={mix}
+                  onPress={() => handlePlaySong(mix)}
+                  onPlay={() => handlePlaySong(mix)}
+                />
+              ))
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="heart-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No liked mixes yet</Text>
+                <Text style={styles.emptyText}>
+                  Tap the heart icon on any mix to save it here
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {activeListenerTab === 'playlists' && (
+          <View style={styles.content}>
+            <View style={styles.emptyContainer}>
+              <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
+              <Text style={styles.emptyTitle}>No playlists yet</Text>
+              <Text style={styles.emptyText}>
+                Create playlists to organize your favorite mixes
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {activeListenerTab === 'downloads' && (
+          <View style={styles.content}>
+            <View style={styles.storageCard}>
+              <View style={styles.storageHeader}>
+                <Ionicons name="phone-portrait-outline" size={20} color={Colors.textSecondary} />
+                <Text style={styles.storageText}>2.4 GB used</Text>
+              </View>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: '24%' }]} />
+              </View>
+            </View>
+
+            {downloadedMixes.length > 0 ? (
+              downloadedMixes.map((mix) => (
+                <MixCard
+                  key={mix.id}
+                  variant="horizontal"
+                  mix={mix}
+                  onPress={() => handlePlaySong(mix)}
+                  onPlay={() => handlePlaySong(mix)}
+                />
+              ))
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="download-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No downloads yet</Text>
+                <Text style={styles.emptyText}>
+                  Download mixes to listen offline
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        <View style={{ height: 120 }} />
+      </ScrollView>
+    </Animated.View>
+  );
+
+  // ========== CREATOR MODE RENDER ==========
+  const renderCreatorContent = () => (
+    <Animated.View style={[{ flex: 1 }, { opacity: contentFade }]}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
+      >
+        {activeCreatorTab === 'uploads' && (
+          <View style={styles.content}>
+            {isLoadingUploads ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="cloud-upload-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>Loading your uploads...</Text>
+              </View>
+            ) : myUploads.length > 0 ? (
+              <>
+                {/* Upload Summary */}
+                <View style={styles.uploadSummary}>
+                  <View style={styles.uploadSummaryItem}>
+                    <Text style={styles.uploadSummaryValue}>{formatNumber(myUploads.length)}</Text>
+                    <Text style={styles.uploadSummaryLabel}>Total Uploads</Text>
+                  </View>
+                  <View style={styles.uploadSummaryDivider} />
+                  <View style={styles.uploadSummaryItem}>
+                    <Text style={styles.uploadSummaryValue}>
+                      {formatNumber(myUploads.reduce((sum, m) => sum + m.plays, 0))}
+                    </Text>
+                    <Text style={styles.uploadSummaryLabel}>Total Plays</Text>
+                  </View>
+                  <View style={styles.uploadSummaryDivider} />
+                  <View style={styles.uploadSummaryItem}>
+                    <Text style={styles.uploadSummaryValue}>
+                      {formatNumber(myUploads.reduce((sum, m) => sum + m.likes, 0))}
+                    </Text>
+                    <Text style={styles.uploadSummaryLabel}>Total Likes</Text>
+                  </View>
+                </View>
+
+                {myUploads.map((mix) => (
+                  <MixCard
+                    key={mix.id}
+                    variant="horizontal"
+                    mix={mix}
+                    onPress={() => navigation.navigate('Player', { mix })}
+                    onPlay={() => navigation.navigate('Player', { mix })}
+                  />
+                ))}
+              </>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="cloud-upload-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No uploads yet</Text>
+                <Text style={styles.emptyText}>
+                  Share your first mix with the world!
+                </Text>
+                <TouchableOpacity
+                  style={styles.uploadButton}
+                  onPress={() => { haptics.light(); navigation.navigate('Upload'); }}
+                >
+                  <Ionicons name="add" size={18} color={Colors.white} />
+                  <Text style={styles.uploadButtonText}>Upload Now</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        {activeCreatorTab === 'playlists' && (
+          <View style={styles.content}>
+            <View style={styles.emptyContainer}>
+              <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
+              <Text style={styles.emptyTitle}>No playlists yet</Text>
+              <Text style={styles.emptyText}>
+                Create playlists to organize your uploads
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {activeCreatorTab === 'drafts' && (
+          <View style={styles.content}>
+            <View style={styles.emptyContainer}>
+              <Ionicons name="document-text-outline" size={48} color={Colors.textTertiary} />
+              <Text style={styles.emptyTitle}>No drafts</Text>
+              <Text style={styles.emptyText}>
+                Uploads that are being reviewed will appear here
+              </Text>
+            </View>
+          </View>
+        )}
+
+        <View style={{ height: 120 }} />
+      </ScrollView>
+    </Animated.View>
+  );
+
+  const currentTabs = isCreatorMode ? creatorTabs : listenerTabs;
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Your Library</Text>
+        <Text style={styles.title}>
+          {isCreatorMode ? 'My Music' : 'Your Library'}
+        </Text>
         <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => haptics.selection()}
-          >
-            <Ionicons name="add" size={24} color={Colors.textPrimary} />
-          </TouchableOpacity>
+          {isCreatorMode && (
+            <TouchableOpacity
+              style={styles.iconButton}
+              onPress={() => { haptics.light(); navigation.navigate('Upload'); }}
+            >
+              <Ionicons name="add" size={24} color={Colors.textPrimary} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
       {/* Tabs */}
       <View style={styles.tabsContainer}>
-        {tabs.map((tab) => (
+        {currentTabs.map((tab) => (
           <TouchableOpacity
             key={tab.key}
-            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-            onPress={() => switchTab(tab.key)}
+            style={[
+              styles.tab,
+              (isCreatorMode ? activeCreatorTab === tab.key : activeListenerTab === tab.key) && styles.tabActive,
+            ]}
+            onPress={() => {
+              if (isCreatorMode) {
+                switchCreatorTab(tab.key as CreatorTab);
+              } else {
+                switchListenerTab(tab.key as ListenerTab);
+              }
+            }}
           >
             <Ionicons
               name={tab.icon as any}
               size={18}
-              color={activeTab === tab.key ? Colors.white : Colors.textSecondary}
+              color={
+                (isCreatorMode ? activeCreatorTab === tab.key : activeListenerTab === tab.key)
+                  ? Colors.white
+                  : Colors.textSecondary
+              }
             />
-            <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+            <Text
+              style={[
+                styles.tabText,
+                (isCreatorMode ? activeCreatorTab === tab.key : activeListenerTab === tab.key) && styles.tabTextActive,
+              ]}
+            >
               {tab.label}
             </Text>
             {tab.count > 0 && (
-              <View style={[styles.tabBadge, activeTab === tab.key && styles.tabBadgeActive]}>
-                <Text style={[styles.tabBadgeText, activeTab === tab.key && styles.tabBadgeTextActive]}>
+              <View
+                style={[
+                  styles.tabBadge,
+                  (isCreatorMode ? activeCreatorTab === tab.key : activeListenerTab === tab.key) && styles.tabBadgeActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tabBadgeText,
+                    (isCreatorMode ? activeCreatorTab === tab.key : activeListenerTab === tab.key) && styles.tabBadgeTextActive,
+                  ]}
+                >
                   {tab.count}
                 </Text>
               </View>
@@ -220,118 +571,7 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
       </View>
 
       {/* Content */}
-      <Animated.View style={[{ flex: 1 }, { opacity: contentFade }]}>
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={Colors.primary}
-              colors={[Colors.primary]}
-            />
-          }
-        >
-          {activeTab === 'liked' && (
-            <View style={styles.content}>
-              {/* Sort & Filter */}
-              <View style={styles.filterRow}>
-                <TouchableOpacity style={styles.filterButton} onPress={() => haptics.selection()}>
-                  <Ionicons name="swap-vertical" size={16} color={Colors.textSecondary} />
-                  <Text style={styles.filterText}>Recently Added</Text>
-                </TouchableOpacity>
-              </View>
-
-              {isLoadingLiked ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="heart-outline" size={48} color={Colors.textTertiary} />
-                  <Text style={styles.emptyTitle}>Loading liked songs...</Text>
-                </View>
-              ) : likedMixes.length > 0 ? (
-                likedMixes.map((mix) => (
-                  <MixCard
-                    key={mix.id}
-                    variant="horizontal"
-                    mix={mix}
-                    onPress={() => navigation.navigate('Player', { mix })}
-                    onPlay={() => navigation.navigate('Player', { mix })}
-                  />
-                ))
-              ) : (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="heart-outline" size={48} color={Colors.textTertiary} />
-                  <Text style={styles.emptyTitle}>No liked mixes yet</Text>
-                  <Text style={styles.emptyText}>
-                    Tap the heart icon on any mix to save it here
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {activeTab === 'playlists' && (
-            <View style={styles.content}>
-              {mockPlaylists.map((playlist) => (
-                <TouchableOpacity
-                  key={playlist.id}
-                  style={styles.playlistCard}
-                  onPress={() => { haptics.selection(); navigation.navigate('Playlist', { playlist }); }}
-                >
-                  <View style={styles.playlistImageContainer}>
-                    <View style={[styles.playlistImage, { backgroundColor: Colors.primary + '30' }]}>
-                      <Ionicons name="musical-notes" size={24} color={Colors.primary} />
-                    </View>
-                  </View>
-                  <View style={styles.playlistInfo}>
-                    <Text style={styles.playlistName}>{playlist.name}</Text>
-                    <Text style={styles.playlistMeta}>
-                      {playlist.mixCount} mixes · {playlist.description}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {activeTab === 'downloads' && (
-            <View style={styles.content}>
-              {/* Storage Info */}
-              <View style={styles.storageCard}>
-                <View style={styles.storageHeader}>
-                  <Ionicons name="phone-portrait-outline" size={20} color={Colors.textSecondary} />
-                  <Text style={styles.storageText}>2.4 GB used</Text>
-                </View>
-                <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: '24%' }]} />
-                </View>
-              </View>
-
-              {downloadedMixes.length > 0 ? (
-                downloadedMixes.map((mix) => (
-                  <MixCard
-                    key={mix.id}
-                    variant="horizontal"
-                    mix={mix}
-                    onPress={() => navigation.navigate('Player', { mix })}
-                    onPlay={() => navigation.navigate('Player', { mix })}
-                  />
-                ))
-              ) : (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="download-outline" size={48} color={Colors.textTertiary} />
-                  <Text style={styles.emptyTitle}>No downloads yet</Text>
-                  <Text style={styles.emptyText}>
-                    Download mixes to listen offline
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          <View style={{ height: 120 }} />
-        </ScrollView>
-      </Animated.View>
+      {isCreatorMode ? renderCreatorContent() : renderListenerContent()}
     </View>
   );
 };
@@ -393,17 +633,16 @@ const styles = StyleSheet.create({
   tabBadge: {
     backgroundColor: Colors.surfaceLight,
     borderRadius: BorderRadius.full,
-    minWidth: 18,
-    height: 18,
-    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    minWidth: 20,
     alignItems: 'center',
-    paddingHorizontal: 4,
   },
   tabBadgeActive: {
     backgroundColor: Colors.white + '30',
   },
   tabBadgeText: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '700',
     color: Colors.textSecondary,
   },
@@ -411,11 +650,14 @@ const styles = StyleSheet.create({
     color: Colors.white,
   },
   content: {
-    paddingHorizontal: Spacing.xl,
+    flex: 1,
   },
+  // Filter
   filterRow: {
     flexDirection: 'row',
-    marginBottom: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    gap: Spacing.sm,
   },
   filterButton: {
     flexDirection: 'row',
@@ -427,16 +669,35 @@ const styles = StyleSheet.create({
     gap: Spacing.xs,
   },
   filterText: {
-    ...Typography.bodySmall,
+    ...Typography.caption,
+    color: Colors.textSecondary,
+    fontWeight: '500',
+  },
+  // Empty
+  emptyContainer: {
+    alignItems: 'center',
+    paddingTop: Spacing.xxxl * 3,
+    paddingHorizontal: Spacing.xl,
+  },
+  emptyTitle: {
+    ...Typography.h3,
+    marginTop: Spacing.lg,
     color: Colors.textSecondary,
   },
+  emptyText: {
+    ...Typography.body,
+    color: Colors.textTertiary,
+    marginTop: Spacing.sm,
+    textAlign: 'center',
+  },
+  // Playlist
   playlistCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.backgroundElevated,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    marginBottom: Spacing.sm,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
   playlistImageContainer: {
     marginRight: Spacing.md,
@@ -456,15 +717,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   playlistMeta: {
-    ...Typography.bodySmall,
-    color: Colors.textSecondary,
-    marginTop: 2,
+    ...Typography.caption,
+    color: Colors.textTertiary,
+    marginTop: 4,
   },
+  // Storage
   storageCard: {
     backgroundColor: Colors.backgroundElevated,
     borderRadius: BorderRadius.md,
     padding: Spacing.lg,
-    marginBottom: Spacing.lg,
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.xl,
   },
   storageHeader: {
     flexDirection: 'row',
@@ -477,28 +740,57 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   progressBar: {
-    height: 4,
+    height: 6,
     backgroundColor: Colors.backgroundHighlight,
-    borderRadius: 2,
+    borderRadius: 3,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
     backgroundColor: Colors.primary,
-    borderRadius: 2,
+    borderRadius: 3,
   },
-  emptyContainer: {
+  // Upload Button
+  uploadButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: Spacing.xxxl * 2,
-  },
-  emptyTitle: {
-    ...Typography.h3,
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
     marginTop: Spacing.lg,
+    gap: Spacing.sm,
   },
-  emptyText: {
-    ...Typography.body,
-    color: Colors.textSecondary,
-    marginTop: Spacing.sm,
-    textAlign: 'center',
+  uploadButtonText: {
+    ...Typography.button,
+    color: Colors.white,
+  },
+  // Creator Upload Summary
+  uploadSummary: {
+    flexDirection: 'row',
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.xl,
+  },
+  uploadSummaryItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  uploadSummaryValue: {
+    ...Typography.h3,
+    color: Colors.primary,
+  },
+  uploadSummaryLabel: {
+    ...Typography.caption,
+    color: Colors.textTertiary,
+    marginTop: 4,
+  },
+  uploadSummaryDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: Colors.border,
+    marginVertical: 4,
   },
 });

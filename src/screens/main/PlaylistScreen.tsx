@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,9 +10,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../../theme';
 import { MixCard } from '../../components';
-import { mockMixes } from '../../data/mockData';
+import { Mix } from '../../data/mockData';
 import { formatDurationText } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
+import { supabase } from '../../config/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface PlaylistScreenProps {
   navigation: any;
@@ -21,10 +23,67 @@ interface PlaylistScreenProps {
 
 export const PlaylistScreen: React.FC<PlaylistScreenProps> = ({ navigation, route }) => {
   const playlist = route?.params?.playlist;
+  const { user } = useAuth();
   const [isLiked, setIsLiked] = useState(false);
+  const [playlistMixes, setPlaylistMixes] = useState<Mix[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Use some mixes as playlist content
-  const playlistMixes = mockMixes.slice(0, playlist?.mixCount || 4);
+  // Fetch playlist songs from DB
+  useEffect(() => {
+    fetchPlaylistSongs();
+  }, [playlist?.id]);
+
+  const fetchPlaylistSongs = async () => {
+    setIsLoading(true);
+    try {
+      if (!playlist?.songIds || playlist.songIds.length === 0) {
+        setPlaylistMixes([]);
+        setIsLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('songs')
+        .select('*')
+        .in('id', playlist.songIds);
+
+      if (error || !data || data.length === 0) {
+        setPlaylistMixes([]);
+      } else {
+        const formatted: Mix[] = data.map((song: any) => ({
+          id: song.id,
+          title: song.title,
+          artist: {
+            id: song.uploaded_by || 'unknown',
+            name: song.artist,
+            handle: '@' + song.artist.toLowerCase().replace(/\s+/g, ''),
+            avatar: 'https://picsum.photos/seed/' + song.artist + '/200/200',
+            bio: '',
+            followers: 0,
+            mixes: 0,
+            isVerified: false,
+            totalEarnings: 0,
+            genre: song.genre || 'Electronic',
+            isFollowing: false,
+          },
+          coverImage: song.cover_image || 'https://picsum.photos/seed/' + song.id + '/400/400',
+          duration: song.duration || 0,
+          plays: song.plays_count || 0,
+          likes: song.likes_count || 0,
+          isLiked: false,
+          isDownloaded: song.is_downloaded || false,
+          genre: song.genre || 'Electronic',
+          uploadedAt: song.created_at,
+          isExclusive: song.is_exclusive || false,
+        }));
+        setPlaylistMixes(formatted);
+      }
+    } catch (err) {
+      setPlaylistMixes([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   if (!playlist) return null;
 
@@ -85,17 +144,30 @@ export const PlaylistScreen: React.FC<PlaylistScreenProps> = ({ navigation, rout
 
         {/* Mix List */}
         <View style={styles.mixList}>
-          {playlistMixes.map((mix, index) => (
-            <View key={mix.id} style={styles.mixRow}>
-              <Text style={styles.mixNumber}>{index + 1}</Text>
-              <MixCard
-                variant="horizontal"
-                mix={mix}
-                onPress={() => navigation.navigate('Player', { mix })}
-                onPlay={() => navigation.navigate('Player', { mix })}
-              />
+          {isLoading ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="musical-notes-outline" size={48} color={Colors.textTertiary} />
+              <Text style={styles.emptyTitle}>Loading playlist...</Text>
             </View>
-          ))}
+          ) : playlistMixes.length > 0 ? (
+            playlistMixes.map((mix, index) => (
+              <View key={mix.id} style={styles.mixRow}>
+                <Text style={styles.mixNumber}>{index + 1}</Text>
+                <MixCard
+                  variant="horizontal"
+                  mix={mix}
+                  onPress={() => navigation.navigate('Player', { mix })}
+                  onPlay={() => navigation.navigate('Player', { mix })}
+                />
+              </View>
+            ))
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="musical-notes-outline" size={48} color={Colors.textTertiary} />
+              <Text style={styles.emptyTitle}>No songs in this playlist</Text>
+              <Text style={styles.emptyText}>Add some songs to get started</Text>
+            </View>
+          )}
         </View>
 
         <View style={{ height: 120 }} />
@@ -215,5 +287,20 @@ const styles = StyleSheet.create({
     width: 24,
     textAlign: 'center',
     marginRight: Spacing.sm,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingTop: Spacing.xxxl * 2,
+    paddingBottom: Spacing.xxxl,
+  },
+  emptyTitle: {
+    ...Typography.h3,
+    marginTop: Spacing.lg,
+    color: Colors.textSecondary,
+  },
+  emptyText: {
+    ...Typography.body,
+    color: Colors.textTertiary,
+    marginTop: Spacing.sm,
   },
 });

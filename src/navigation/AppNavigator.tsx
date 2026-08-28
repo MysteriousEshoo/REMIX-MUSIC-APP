@@ -6,6 +6,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, Text, StyleSheet, Platform, ActivityIndicator } from 'react-native';
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../theme';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { AudioProvider } from '../contexts/AudioContext';
+import { MiniPlayer } from '../components/MiniPlayer';
 
 // Screens
 import { SplashScreen } from '../screens/SplashScreen';
@@ -34,69 +36,73 @@ const MainStack = createNativeStackNavigator();
 // ==================== TAB NAVIGATOR ====================
 function MainTabNavigator() {
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: Colors.tabBarActive,
-        tabBarInactiveTintColor: Colors.tabBarInactive,
-        tabBarLabelStyle: styles.tabBarLabel,
-        tabBarHideOnKeyboard: true,
-      }}
-    >
-      <Tab.Screen
-        name="Home"
-        component={HomeScreen}
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <Ionicons
-              name={focused ? 'home' : 'home-outline'}
-              size={24}
-              color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
-            />
-          ),
+    <View style={{ flex: 1 }}>
+      <Tab.Navigator
+        screenOptions={{
+          headerShown: false,
+          tabBarStyle: styles.tabBar,
+          tabBarActiveTintColor: Colors.tabBarActive,
+          tabBarInactiveTintColor: Colors.tabBarInactive,
+          tabBarLabelStyle: styles.tabBarLabel,
+          tabBarHideOnKeyboard: true,
         }}
-      />
-      <Tab.Screen
-        name="Search"
-        component={SearchScreen}
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <Ionicons
-              name={focused ? 'search' : 'search-outline'}
-              size={24}
-              color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
-            />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Library"
-        component={LibraryScreen}
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <Ionicons
-              name={focused ? 'library' : 'library-outline'}
-              size={24}
-              color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
-            />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Profile"
-        component={ProfileScreen}
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <Ionicons
-              name={focused ? 'person' : 'person-outline'}
-              size={24}
-              color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
-            />
-          ),
-        }}
-      />
-    </Tab.Navigator>
+      >
+        <Tab.Screen
+          name="Home"
+          component={HomeScreen}
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <Ionicons
+                name={focused ? 'home' : 'home-outline'}
+                size={24}
+                color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
+              />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Search"
+          component={SearchScreen}
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <Ionicons
+                name={focused ? 'search' : 'search-outline'}
+                size={24}
+                color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
+              />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Library"
+          component={LibraryScreen}
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <Ionicons
+                name={focused ? 'library' : 'library-outline'}
+                size={24}
+                color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
+              />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Profile"
+          component={ProfileScreen}
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <Ionicons
+                name={focused ? 'person' : 'person-outline'}
+                size={24}
+                color={focused ? Colors.tabBarActive : Colors.tabBarInactive}
+              />
+            ),
+          }}
+        />
+      </Tab.Navigator>
+      {/* MiniPlayer — sirf tab screens pe dikhega jab gaana chal raha ho */}
+      <MiniPlayer />
+    </View>
   );
 }
 
@@ -168,7 +174,9 @@ const InnerNavigator: React.FC = () => {
 export const AppNavigator: React.FC = () => {
   return (
     <AuthProvider>
-      <InnerNavigator />
+      <AudioProvider>
+        <InnerNavigator />
+      </AudioProvider>
     </AuthProvider>
   );
 };
