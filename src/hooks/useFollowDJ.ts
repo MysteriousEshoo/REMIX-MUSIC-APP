@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../config/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { notifyFollow } from '../utils/notifications';
 
 /**
  * useFollowDJ hook — Kisi bhi DJ ko follow/unfollow karne ke liye
@@ -78,6 +79,9 @@ export const useFollowDJ = (djId: string) => {
         if (!error) {
           setIsFollowing(true);
           setFollowerCount(prev => prev + 1);
+          
+          // Send push notification to DJ
+          await notifyFollow(user.id, djId);
         }
       }
     } catch (err) {

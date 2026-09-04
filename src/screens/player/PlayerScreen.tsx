@@ -9,6 +9,11 @@ import {
   Dimensions,
   Platform,
   ScrollView,
+  Alert,
+  Modal,
+  TextInput,
+  FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView, PanGestureHandler, State, Swipeable } from 'react-native-gesture-handler';
@@ -17,6 +22,9 @@ import { Mix } from '../../data/mockData';
 import { formatDuration } from '../../utils/helpers';
 import { useAudioContext } from '../../contexts/AudioContext';
 import { useLikeSong } from '../../hooks/useLikeSong';
+import { useCoins } from '../../contexts/CoinsContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { usePlaylists } from '../../contexts/PlaylistContext';
 import { haptics } from '../../utils/haptics';
 
 const { width, height } = Dimensions.get('window');
@@ -35,7 +43,26 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
 
   const audio = useAudioContext();
   const { isLiked, likeSong, statusChecked } = useLikeSong(mix?.id || '');
+  const { balance, earnCoins, sendTip } = useCoins();
+  const { user } = useAuth();
+  const { playlists, addSongToPlaylist, createPlaylist } = usePlaylists();
   const [showQueue, setShowQueue] = useState(false);
+
+  // Tip modal state
+  const [showTipModal, setShowTipModal] = useState(false);
+  const [tipAmount, setTipAmount] = useState('5');
+  const [sendingTip, setSendingTip] = useState(false);
+
+  // Coin earning state
+  const [hasEarnedCoins, setHasEarnedCoins] = useState(false);
+  const [earnedAmount, setEarnedAmount] = useState(0);
+
+  // Add to Playlist modal state
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  const [showCreatePlaylist, setShowCreatePlaylist] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [isCreatingPlaylist, setIsCreatingPlaylist] = useState(false);
+  const [addingToPlaylistId, setAddingToPlaylistId] = useState<string | null>(null);
 
   // Vinyl rotation animation
   const vinylRotation = useRef(new Animated.Value(0)).current;
@@ -44,6 +71,7 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
   // Scale animations
   const playScaleAnim = useRef(new Animated.Value(1)).current;
   const likeScaleAnim = useRef(new Animated.Value(1)).current;
+  const coinAnim = useRef(new Animated.Value(0)).current;
 
   // Drag state
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
@@ -85,6 +113,42 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
       }
       audio.loadAndPlay(mix, mix.audioUrl || 'https://example.com/mock-audio.mp3');
     }
+  }, [mix?.id]);
+
+  // ==================== EARN COINS WHEN SONG PLAYS ====================
+  useEffect(() => {
+    if (mix && audio.isPlaying && audio.currentTime > 5 && !hasEarnedCoins && user) {
+      // Earn 1 coin after 5 seconds of playing
+      const earnCoinsAsync = async () => {
+        const newBalance = await earnCoins(mix.id);
+        if (newBalance > balance) {
+          setHasEarnedCoins(true);
+          setEarnedAmount(1);
+          
+          // Show coin animation
+          Animated.sequence([
+            Animated.timing(coinAnim, {
+              toValue: 1,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+            Animated.delay(1000),
+            Animated.timing(coinAnim, {
+              toValue: 0,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+          ]).start();
+        }
+      };
+      earnCoinsAsync();
+    }
+  }, [mix, audio.isPlaying, audio.currentTime, hasEarnedCoins, user]);
+
+  // Reset earned state when song changes
+  useEffect(() => {
+    setHasEarnedCoins(false);
+    setEarnedAmount(0);
   }, [mix?.id]);
 
   const handlePlayPause = useCallback(() => {
@@ -135,6 +199,95 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
     haptics.light();
     audio.playNext();
   }, [audio.playNext]);
+
+  // ==================== TIP FUNCTIONALITY ====================
+
+  const handleTip = useCallback(async () => {
+    if (!mix?.artist?.id || !user) return;
+    
+    const amount = parseInt(tipAmount) || 0;
+    if (amount <= 0) {
+      Alert.alert('Invalid Amount', 'Please enter a valid coin amount.');
+      return;
+    }
+
+    if (amount > balance) {
+      Alert.alert('Insufficient Coins', `You only have ${balance} coins. Earn more by listening to songs!`);
+      return;
+    }
+
+    if (mix.artist.id === user.id) {
+      Alert.alert('Cannot Tip Yourself', 'You cannot tip your own songs.');
+      return;
+    }
+
+    setSendingTip(true);
+    try {
+      const result = await sendTip(mix.artist.id, amount);
+      
+      if (result.success) {
+        haptics.success();
+        Alert.alert(
+          '🎉 Tip Sent!',
+          `You tipped ${amount} coins to ${mix.artist?.name || 'the DJ'}!`,
+          [{ text: 'OK' }]
+        );
+        setShowTipModal(false);
+        setTipAmount('5');
+      } else {
+        Alert.alert('Tip Failed', result.error || 'Something went wrong. Please try again.');
+      }
+    } catch (err) {
+      Alert.alert('Tip Failed', 'Something went wrong. Please try again.');
+    } finally {
+      setSendingTip(false);
+    }
+  }, [mix, user, tipAmount, balance, sendTip]);
+
+  const quickTipAmounts = [5, 10, 25, 50];
+
+  // ==================== ADD TO PLAYLIST ====================
+
+  const handleAddToPlaylist = useCallback(async (playlistId: string) => {
+    if (!mix?.id) return;
+
+    setAddingToPlaylistId(playlistId);
+    try {
+      const success = await addSongToPlaylist(playlistId, mix.id);
+      if (success) {
+        haptics.success();
+        Alert.alert('✅ Added!', 'Song added to playlist');
+        setShowPlaylistModal(false);
+      } else {
+        Alert.alert('Already Added', 'This song is already in the playlist');
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to add song to playlist');
+    } finally {
+      setAddingToPlaylistId(null);
+    }
+  }, [mix?.id, addSongToPlaylist]);
+
+  const handleCreateAndAdd = useCallback(async () => {
+    if (!newPlaylistName.trim() || !mix?.id) return;
+
+    setIsCreatingPlaylist(true);
+    try {
+      const newPlaylist = await createPlaylist(newPlaylistName.trim());
+      if (newPlaylist) {
+        await addSongToPlaylist(newPlaylist.id, mix.id);
+        haptics.success();
+        Alert.alert('✅ Created!', `Playlist "${newPlaylistName}" created and song added`);
+        setShowCreatePlaylist(false);
+        setShowPlaylistModal(false);
+        setNewPlaylistName('');
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to create playlist');
+    } finally {
+      setIsCreatingPlaylist(false);
+    }
+  }, [newPlaylistName, mix?.id, createPlaylist, addSongToPlaylist]);
 
   // ==================== SWIPE TO DELETE ====================
 
@@ -326,6 +479,31 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
           </TouchableOpacity>
         </View>
 
+        {/* Coin Balance Badge */}
+        <View style={styles.coinBadge}>
+          <Ionicons name="diamond" size={16} color={Colors.gold} />
+          <Text style={styles.coinBadgeText}>{balance}</Text>
+        </View>
+
+        {/* Coin Earn Animation */}
+        <Animated.View
+          style={[
+            styles.coinEarnPopup,
+            {
+              opacity: coinAnim,
+              transform: [{
+                translateY: coinAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [20, 0],
+                }),
+              }],
+            },
+          ]}
+        >
+          <Ionicons name="diamond" size={16} color={Colors.gold} />
+          <Text style={styles.coinEarnText}>+{earnedAmount} coin earned!</Text>
+        </Animated.View>
+
         {/* Album Art with Vinyl */}
         <View style={styles.artworkContainer}>
           <View style={styles.artworkWrapper}>
@@ -448,8 +626,11 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
           <TouchableOpacity style={styles.extraButton}>
             <Ionicons name="airplane" size={20} color={Colors.white} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.extraButton}>
-            <Ionicons name="chatbubble-ellipses-outline" size={20} color={Colors.white} />
+          <TouchableOpacity style={styles.extraButton} onPress={() => {
+            haptics.light();
+            setShowPlaylistModal(true);
+          }}>
+            <Ionicons name="add-circle-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.extraButton} onPress={() => { haptics.selection(); setShowQueue(!showQueue); }}>
             <Ionicons name="list" size={20} color={showQueue ? Colors.primary : Colors.white} />
@@ -462,10 +643,17 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
         {/* Tip Button */}
         <TouchableOpacity
           style={styles.tipButton}
-          onPress={() => haptics.success()}
+          onPress={() => {
+            haptics.light();
+            setShowTipModal(true);
+          }}
         >
           <Ionicons name="gift" size={20} color={Colors.gold} />
           <Text style={styles.tipText}>Tip DJ</Text>
+          <View style={styles.tipBalance}>
+            <Ionicons name="diamond" size={12} color={Colors.gold} />
+            <Text style={styles.tipBalanceText}>{balance}</Text>
+          </View>
         </TouchableOpacity>
 
         {/* Queue List */}
@@ -486,6 +674,226 @@ export const PlayerScreen: React.FC<PlayerScreenProps> = ({ navigation, route })
             </View>
           </View>
         )}
+
+        {/* ==================== TIP MODAL ==================== */}
+        <Modal
+          visible={showTipModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowTipModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              {/* Modal Header */}
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>💎 Tip {mix.artist?.name || 'DJ'}</Text>
+                <TouchableOpacity onPress={() => setShowTipModal(false)}>
+                  <Ionicons name="close" size={24} color={Colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Current Balance */}
+              <View style={styles.balanceRow}>
+                <Ionicons name="diamond" size={20} color={Colors.gold} />
+                <Text style={styles.balanceText}>{balance} coins available</Text>
+              </View>
+
+              {/* Quick Tip Amounts */}
+              <View style={styles.quickAmounts}>
+                {quickTipAmounts.map((amount) => (
+                  <TouchableOpacity
+                    key={amount}
+                    style={[
+                      styles.quickAmountButton,
+                      tipAmount === String(amount) && styles.quickAmountActive,
+                    ]}
+                    onPress={() => {
+                      haptics.selection();
+                      setTipAmount(String(amount));
+                    }}
+                  >
+                    <Ionicons name="diamond" size={14} color={tipAmount === String(amount) ? Colors.white : Colors.gold} />
+                    <Text style={[
+                      styles.quickAmountText,
+                      tipAmount === String(amount) && styles.quickAmountTextActive,
+                    ]}>
+                      {amount}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Custom Amount Input */}
+              <View style={styles.customAmountContainer}>
+                <Text style={styles.customAmountLabel}>Custom Amount</Text>
+                <View style={styles.customAmountRow}>
+                  <TouchableOpacity
+                    style={styles.amountButton}
+                    onPress={() => {
+                      const current = parseInt(tipAmount) || 0;
+                      if (current > 1) setTipAmount(String(current - 1));
+                    }}
+                  >
+                    <Ionicons name="remove" size={20} color={Colors.textPrimary} />
+                  </TouchableOpacity>
+                  <View style={styles.amountInputContainer}>
+                    <Ionicons name="diamond" size={18} color={Colors.gold} />
+                    <TextInput
+                      style={styles.amountInput}
+                      value={tipAmount}
+                      onChangeText={setTipAmount}
+                      keyboardType="numeric"
+                      maxLength={4}
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={styles.amountButton}
+                    onPress={() => {
+                      const current = parseInt(tipAmount) || 0;
+                      if (current < balance) setTipAmount(String(current + 1));
+                    }}
+                  >
+                    <Ionicons name="add" size={20} color={Colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Send Tip Button */}
+              <TouchableOpacity
+                style={[
+                  styles.sendTipButton,
+                  (sendingTip || !tipAmount || parseInt(tipAmount) <= 0 || parseInt(tipAmount) > balance) && styles.sendTipButtonDisabled,
+                ]}
+                onPress={handleTip}
+                disabled={sendingTip || !tipAmount || parseInt(tipAmount) <= 0 || parseInt(tipAmount) > balance}
+              >
+                {sendingTip ? (
+                  <Text style={styles.sendTipText}>Sending...</Text>
+                ) : (
+                  <>
+                    <Ionicons name="send" size={18} color={Colors.white} />
+                    <Text style={styles.sendTipText}>
+                      Send {tipAmount || '0'} Coins
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {/* Tip Message */}
+              <Text style={styles.tipMessage}>
+                Support your favorite DJs! They receive 100% of your tip.
+              </Text>
+            </View>
+          </View>
+        </Modal>
+
+        {/* ==================== ADD TO PLAYLIST MODAL ==================== */}
+        <Modal
+          visible={showPlaylistModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowPlaylistModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Add to Playlist</Text>
+                <TouchableOpacity onPress={() => setShowPlaylistModal(false)}>
+                  <Ionicons name="close" size={24} color={Colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Create New Playlist Button */}
+              <TouchableOpacity
+                style={styles.createPlaylistButton}
+                onPress={() => setShowCreatePlaylist(true)}
+              >
+                <Ionicons name="add-circle-outline" size={24} color={Colors.primary} />
+                <Text style={styles.createPlaylistText}>Create New Playlist</Text>
+              </TouchableOpacity>
+
+              {/* Existing Playlists */}
+              <ScrollView style={styles.playlistList} showsVerticalScrollIndicator={false}>
+                {playlists.length > 0 ? (
+                  playlists.map((playlist) => (
+                    <TouchableOpacity
+                      key={playlist.id}
+                      style={styles.playlistItem}
+                      onPress={() => handleAddToPlaylist(playlist.id)}
+                      disabled={addingToPlaylistId === playlist.id}
+                    >
+                      <View style={styles.playlistItemImage}>
+                        <Ionicons name="musical-notes" size={24} color={Colors.primary} />
+                      </View>
+                      <View style={styles.playlistItemInfo}>
+                        <Text style={styles.playlistItemName}>{playlist.name}</Text>
+                        <Text style={styles.playlistItemCount}>{playlist.song_count} songs</Text>
+                      </View>
+                      {addingToPlaylistId === playlist.id ? (
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                      ) : (
+                        <Ionicons name="add-circle-outline" size={24} color={Colors.primary} />
+                      )}
+                    </TouchableOpacity>
+                  ))
+                ) : (
+                  <View style={styles.emptyPlaylists}>
+                    <Ionicons name="list-outline" size={40} color={Colors.textTertiary} />
+                    <Text style={styles.emptyPlaylistsText}>No playlists yet</Text>
+                    <Text style={styles.emptyPlaylistsSubtext}>Create one to get started</Text>
+                  </View>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {/* ==================== CREATE PLAYLIST MODAL ==================== */}
+        <Modal
+          visible={showCreatePlaylist}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowCreatePlaylist(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Create Playlist</Text>
+                <TouchableOpacity onPress={() => setShowCreatePlaylist(false)}>
+                  <Ionicons name="close" size={24} color={Colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.createPlaylistForm}>
+                <Text style={styles.createPlaylistLabel}>Playlist Name</Text>
+                <TextInput
+                  style={styles.createPlaylistInput}
+                  placeholder="My Playlist"
+                  placeholderTextColor={Colors.textTertiary}
+                  value={newPlaylistName}
+                  onChangeText={setNewPlaylistName}
+                  maxLength={50}
+                  autoFocus
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.createPlaylistConfirmButton,
+                  (!newPlaylistName.trim() || isCreatingPlaylist) && styles.createPlaylistConfirmDisabled,
+                ]}
+                onPress={handleCreateAndAdd}
+                disabled={!newPlaylistName.trim() || isCreatingPlaylist}
+              >
+                {isCreatingPlaylist ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <Text style={styles.createPlaylistConfirmText}>Create & Add Song</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </View>
     </GestureHandlerRootView>
   );
@@ -536,6 +944,46 @@ const styles = StyleSheet.create({
     ...Typography.body,
     fontWeight: '600',
     color: Colors.white,
+  },
+
+  // Coin Badge
+  coinBadge: {
+    position: 'absolute',
+    top: Spacing.xxl + 52,
+    right: Spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.gold + '20',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    gap: Spacing.xs,
+    zIndex: 10,
+  },
+  coinBadgeText: {
+    ...Typography.bodySmall,
+    color: Colors.gold,
+    fontWeight: '700',
+  },
+
+  // Coin Earn Animation
+  coinEarnPopup: {
+    position: 'absolute',
+    top: Spacing.xxl + 80,
+    right: Spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.gold,
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    gap: Spacing.xs,
+    zIndex: 10,
+  },
+  coinEarnText: {
+    ...Typography.bodySmall,
+    color: Colors.black,
+    fontWeight: '700',
   },
 
   // Artwork + Vinyl
@@ -748,6 +1196,20 @@ const styles = StyleSheet.create({
     ...Typography.button,
     color: Colors.gold,
   },
+  tipBalance: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.gold + '30',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 2,
+    gap: 4,
+  },
+  tipBalanceText: {
+    ...Typography.caption,
+    color: Colors.gold,
+    fontWeight: '600',
+  },
 
   // Queue
   queueContainer: {
@@ -865,5 +1327,230 @@ const styles = StyleSheet.create({
   queueHintText: {
     ...Typography.caption,
     color: Colors.textTertiary,
+  },
+
+  // ==================== MODAL STYLES ====================
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: BorderRadius.xl,
+    borderTopRightRadius: BorderRadius.xl,
+    paddingHorizontal: Spacing.xl,
+    paddingBottom: Spacing.xxxl + 20,
+    paddingTop: Spacing.xl,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.xl,
+  },
+  modalTitle: {
+    ...Typography.h3,
+    color: Colors.white,
+  },
+
+  // Tip Modal
+  balanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    marginBottom: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  balanceText: {
+    ...Typography.body,
+    color: Colors.textSecondary,
+  },
+  quickAmounts: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  quickAmountButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.md,
+    gap: Spacing.xs,
+  },
+  quickAmountActive: {
+    backgroundColor: Colors.gold,
+  },
+  quickAmountText: {
+    ...Typography.body,
+    color: Colors.textPrimary,
+    fontWeight: '600',
+  },
+  quickAmountTextActive: {
+    color: Colors.white,
+  },
+  customAmountContainer: {
+    marginBottom: Spacing.xl,
+  },
+  customAmountLabel: {
+    ...Typography.bodySmall,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+  },
+  customAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.lg,
+  },
+  amountButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.backgroundElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  amountInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    minWidth: 120,
+    justifyContent: 'center',
+    gap: Spacing.sm,
+  },
+  amountInput: {
+    ...Typography.h2,
+    color: Colors.gold,
+    fontWeight: '700',
+    minWidth: 50,
+    textAlign: 'center',
+  },
+  sendTipButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.gold,
+    borderRadius: BorderRadius.full,
+    height: 56,
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  sendTipButtonDisabled: {
+    opacity: 0.5,
+  },
+  sendTipText: {
+    ...Typography.buttonLarge,
+    color: Colors.white,
+  },
+  tipMessage: {
+    ...Typography.caption,
+    color: Colors.textTertiary,
+    textAlign: 'center',
+  },
+
+  // Add to Playlist Modal
+  createPlaylistButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+    marginBottom: Spacing.lg,
+    gap: Spacing.md,
+  },
+  createPlaylistText: {
+    ...Typography.body,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  playlistList: {
+    maxHeight: 300,
+  },
+  playlistItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: Spacing.md,
+  },
+  playlistItemImage: {
+    width: 48,
+    height: 48,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.backgroundElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playlistItemInfo: {
+    flex: 1,
+  },
+  playlistItemName: {
+    ...Typography.body,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  playlistItemCount: {
+    ...Typography.bodySmall,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  emptyPlaylists: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xxxl,
+  },
+  emptyPlaylistsText: {
+    ...Typography.body,
+    color: Colors.textSecondary,
+    marginTop: Spacing.md,
+  },
+  emptyPlaylistsSubtext: {
+    ...Typography.bodySmall,
+    color: Colors.textTertiary,
+    marginTop: Spacing.xs,
+  },
+
+  // Create Playlist Modal
+  createPlaylistForm: {
+    marginBottom: Spacing.xl,
+  },
+  createPlaylistLabel: {
+    ...Typography.bodySmall,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+  },
+  createPlaylistInput: {
+    backgroundColor: Colors.backgroundElevated,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    ...Typography.body,
+    color: Colors.textPrimary,
+  },
+  createPlaylistConfirmButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.full,
+    height: 48,
+  },
+  createPlaylistConfirmDisabled: {
+    opacity: 0.5,
+  },
+  createPlaylistConfirmText: {
+    ...Typography.button,
+    color: Colors.white,
   },
 });

@@ -14,6 +14,7 @@ import { formatNumber, formatCurrency } from '../../utils/helpers';
 import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { useCoins } from '../../contexts/CoinsContext';
 
 interface CreatorDashboardScreenProps {
   navigation: any;
@@ -24,7 +25,6 @@ interface CreatorAnalytics {
   activeListeners: number;
   avgListenTime: string;
   followerGrowth: number;
-  coinsEarned: number;
   estimatedEarnings: number;
   totalMixes: number;
   totalLikes: number;
@@ -34,6 +34,7 @@ interface CreatorAnalytics {
 
 export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ navigation }) => {
   const { user } = useAuth();
+  const { balance, totalEarned, totalSpent, refreshAll } = useCoins();
   const [period, setPeriod] = useState<'week' | 'month' | 'all'>('month');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -42,7 +43,6 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
     activeListeners: 0,
     avgListenTime: '0:00',
     followerGrowth: 0,
-    coinsEarned: 0,
     estimatedEarnings: 0,
     totalMixes: 0,
     totalLikes: 0,
@@ -111,9 +111,8 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
       const avgListenMinutes = 15 + Math.floor(Math.random() * 20);
       const avgListenSeconds = Math.floor(Math.random() * 60);
 
-      // Coins: 1 play = 1 coin (simplified)
-      const coinsEarned = totalPlays;
-      const estimatedEarnings = (coinsEarned * 0.001).toFixed(2); // $0.001 per coin
+      // Estimated earnings from coins (15% platform fee)
+      const estimatedEarnings = (balance * 0.001 * 0.85).toFixed(2); // $0.001 per coin, 85% to creator
 
       // Generate weekly listener data
       const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -130,7 +129,6 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
         activeListeners,
         avgListenTime: `${avgListenMinutes}:${avgListenSeconds.toString().padStart(2, '0')}`,
         followerGrowth: Math.floor(followerCount * 0.1), // 10% growth simulation
-        coinsEarned,
         estimatedEarnings: parseFloat(estimatedEarnings),
         totalMixes: songs.length,
         totalLikes,
@@ -146,7 +144,7 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await fetchAnalytics();
+    await Promise.all([fetchAnalytics(), refreshAll()]);
     setIsRefreshing(false);
   }, [period]);
 
@@ -185,24 +183,29 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
           </TouchableOpacity>
         </View>
 
-        {/* Coin Balance Card */}
+        {/* Coin Balance Card — REAL DATA */}
         <View style={styles.section}>
           <View style={styles.coinCard}>
             <View style={styles.coinHeader}>
               <Ionicons name="diamond" size={28} color={Colors.gold} />
               <Text style={styles.coinTitle}>Coin Balance</Text>
             </View>
-            <Text style={styles.coinBalance}>{formatNumber(analytics.coinsEarned)}</Text>
-            <Text style={styles.coinSubtext}>Total coins earned from your mixes</Text>
+            <Text style={styles.coinBalance}>{formatNumber(balance)}</Text>
+            <Text style={styles.coinSubtext}>Your current coin balance from tips & plays</Text>
             <View style={styles.coinStats}>
               <View style={styles.coinStatItem}>
-                <Text style={styles.coinStatValue}>${analytics.estimatedEarnings.toFixed(2)}</Text>
-                <Text style={styles.coinStatLabel}>Estimated Value</Text>
+                <Text style={styles.coinStatValue}>{formatNumber(totalEarned)}</Text>
+                <Text style={styles.coinStatLabel}>Total Earned</Text>
               </View>
               <View style={styles.coinStatDivider} />
               <View style={styles.coinStatItem}>
-                <Text style={styles.coinStatValue}>15%</Text>
-                <Text style={styles.coinStatLabel}>Platform Fee</Text>
+                <Text style={styles.coinStatValue}>{formatNumber(totalSpent)}</Text>
+                <Text style={styles.coinStatLabel}>Total Tipped</Text>
+              </View>
+              <View style={styles.coinStatDivider} />
+              <View style={styles.coinStatItem}>
+                <Text style={styles.coinStatValue}>{formatCurrency(analytics.estimatedEarnings)}</Text>
+                <Text style={styles.coinStatLabel}>Est. Value</Text>
               </View>
             </View>
           </View>
@@ -313,13 +316,20 @@ export const CreatorDashboardScreen: React.FC<CreatorDashboardScreenProps> = ({ 
           <Text style={styles.sectionTitle}>Earnings</Text>
           <View style={styles.earningsCard}>
             <View style={styles.earningsRow}>
-              <Text style={styles.earningsLabel}>Coins This Period</Text>
-              <Text style={styles.earningsValue}>{formatNumber(analytics.coinsEarned)}</Text>
+              <Text style={styles.earningsLabel}>Current Balance</Text>
+              <Text style={styles.earningsValue}>{formatNumber(balance)} coins</Text>
+            </View>
+            <View style={styles.earningsDivider} />
+            <View style={styles.earningsRow}>
+              <Text style={styles.earningsLabel}>Tips Received</Text>
+              <Text style={[styles.earningsValue, { color: Colors.success }]}>
+                {formatNumber(totalEarned)} coins
+              </Text>
             </View>
             <View style={styles.earningsDivider} />
             <View style={styles.earningsRow}>
               <Text style={styles.earningsLabel}>Estimated Cash Value</Text>
-              <Text style={[styles.earningsValue, { color: Colors.success }]}>
+              <Text style={[styles.earningsValue, { color: Colors.gold }]}>
                 {formatCurrency(analytics.estimatedEarnings)}
               </Text>
             </View>

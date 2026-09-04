@@ -20,6 +20,7 @@ import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAudioContext } from '../../contexts/AudioContext';
+import { useCoins } from '../../contexts/CoinsContext';
 
 const MODE_STORAGE_KEY = '@remix_user_mode';
 const { width } = Dimensions.get('window');
@@ -66,7 +67,6 @@ interface CreatorStats {
   totalPlays: number;
   totalLikes: number;
   totalFollowers: number;
-  totalCoins: number;
   totalMixes: number;
   recentPlays: number;
 }
@@ -89,6 +89,7 @@ interface TopDJ {
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const { user } = useAuth();
   const { setQueue, setCurrentMix } = useAudioContext();
+  const { balance: coinBalance } = useCoins();
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedChip, setSelectedChip] = useState('All');
@@ -107,7 +108,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     totalPlays: 0,
     totalLikes: 0,
     totalFollowers: 0,
-    totalCoins: 0,
     totalMixes: 0,
     recentPlays: 0,
   });
@@ -412,7 +412,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         totalPlays,
         totalLikes,
         totalFollowers: followerCount || 0,
-        totalCoins: 0,
         totalMixes: mixCount || 0,
         recentPlays: Math.floor(totalPlays * 0.15),
       });
@@ -629,7 +628,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           </View>
           <View style={styles.statCard}>
             <Ionicons name="diamond" size={24} color={Colors.gold} />
-            <Text style={styles.statValue}>{formatNumber(creatorStats.totalCoins)}</Text>
+            <Text style={styles.statValue}>{formatNumber(coinBalance)}</Text>
             <Text style={styles.statLabel}>Coins</Text>
           </View>
         </View>
@@ -679,7 +678,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
           </View>
           <View style={styles.earningsRow}>
             <View style={styles.earningsItem}>
-              <Text style={styles.earningsValue}>{formatNumber(creatorStats.totalCoins)}</Text>
+              <Text style={styles.earningsValue}>{formatNumber(coinBalance)}</Text>
               <Text style={styles.earningsLabel}>Total Coins</Text>
             </View>
             <View style={styles.earningsDivider} />

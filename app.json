@@ -14,8 +14,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.remix.app",
       "infoPlist": {
-        "UIBackgroundModes": ["audio"]
-      }
+        "UIBackgroundModes": ["audio", "remote-notification"]
+      },
+      "usesAppleSignIn": false
     },
     "android": {
       "adaptiveIcon": {
@@ -25,14 +26,24 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.remix.app",
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-font",
-      "expo-av"
+      "expo-av",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#1DB954",
+          "sounds": ["./assets/notification.wav"],
+          "mode": "production"
+        }
+      ]
     ],
     "extra": {
       "eas": {

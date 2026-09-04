@@ -7,12 +7,14 @@
  * - Cover image bhi Storage mein jaata hai
  * - Metadata (title, genre, description) songs table mein save hota hai
  * - Progress indicator dikhta hai upload ke dauran
+ * - Followers ko push notification jaata hai new song pe
  *
  * STEPS:
  * 1. Select audio file (document picker)
  * 2. Fill details (title, description, genre, cover image)
  * 3. Upload files to Supabase Storage + save metadata to songs table
- * 4. Success screen
+ * 4. Send notification to all followers
+ * 5. Success screen
  */
 
 import React, { useState, useCallback } from 'react';
@@ -36,6 +38,7 @@ import { genres } from '../../data/mockData';
 import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { notifyNewUpload } from '../../utils/notifications';
 
 interface UploadScreenProps {
   navigation: any;
@@ -66,6 +69,7 @@ export const UploadScreen: React.FC<UploadScreenProps> = ({ navigation }) => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [songId, setSongId] = useState<string | null>(null);
 
   // ==================== FILE PICKING ====================
 
@@ -230,7 +234,7 @@ export const UploadScreen: React.FC<UploadScreenProps> = ({ navigation }) => {
       setUploadStatus('Saving song details...');
 
       // Step 3: Save metadata to songs table
-      const { error: insertError } = await supabase
+      const { data: songData, error: insertError } = await supabase
         .from('songs')
         .insert({
           title: title.trim(),
@@ -244,11 +248,26 @@ export const UploadScreen: React.FC<UploadScreenProps> = ({ navigation }) => {
           is_exclusive: isExclusive,
           plays_count: 0,
           likes_count: 0,
-        });
+        })
+        .select('id')
+        .single();
 
       if (insertError) {
         console.log('[UploadScreen] Insert error:', insertError);
         throw new Error('Failed to save song details. Please try again.');
+      }
+
+      // Save song ID for notification
+      if (songData?.id) {
+        setSongId(songData.id);
+      }
+
+      setUploadProgress(90);
+      setUploadStatus('Notifying followers...');
+
+      // Step 4: Send push notification to all followers
+      if (songData?.id) {
+        await notifyNewUpload(user.id, songData.id, title.trim());
       }
 
       setUploadProgress(100);
@@ -496,6 +515,16 @@ export const UploadScreen: React.FC<UploadScreenProps> = ({ navigation }) => {
                   {uploadProgress >= 100 ? 'Song published!' : 'Saving song details...'}
                 </Text>
               </View>
+              <View style={styles.uploadStep}>
+                <Ionicons
+                  name={uploadProgress >= 100 ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={18}
+                  color={uploadProgress >= 100 ? Colors.success : Colors.textTertiary}
+                />
+                <Text style={styles.uploadStepText}>
+                  {uploadProgress >= 100 ? 'Followers notified!' : 'Notifying followers...'}
+                </Text>
+              </View>
             </View>
           </View>
         </View>
@@ -532,6 +561,10 @@ export const UploadScreen: React.FC<UploadScreenProps> = ({ navigation }) => {
                 <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
                 <Text style={styles.successDetailText}>Song metadata saved to database</Text>
               </View>
+              <View style={styles.successDetailItem}>
+                <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+                <Text style={styles.successDetailText}>Followers notified about new song</Text>
+              </View>
             </View>
 
             <TouchableOpacity
@@ -554,6 +587,7 @@ export const UploadScreen: React.FC<UploadScreenProps> = ({ navigation }) => {
                 setCoverImage(null);
                 setUploadProgress(0);
                 setUploadStatus('');
+                setSongId(null);
                 setStep('select');
               }}
             >

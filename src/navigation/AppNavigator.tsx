@@ -7,6 +7,9 @@ import { View, Text, StyleSheet, Platform, ActivityIndicator } from 'react-nativ
 import { Colors, Typography, Spacing, BorderRadius, Layout } from '../theme';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { AudioProvider } from '../contexts/AudioContext';
+import { PushNotificationProvider } from '../contexts/PushNotificationContext';
+import { CoinsProvider } from '../contexts/CoinsContext';
+import { PlaylistProvider } from '../contexts/PlaylistContext';
 import { MiniPlayer } from '../components/MiniPlayer';
 
 // Screens
@@ -175,7 +178,13 @@ export const AppNavigator: React.FC = () => {
   return (
     <AuthProvider>
       <AudioProvider>
-        <InnerNavigator />
+        <PushNotificationProvider>
+          <CoinsProvider>
+            <PlaylistProvider>
+              <InnerNavigator />
+            </PlaylistProvider>
+          </CoinsProvider>
+        </PushNotificationProvider>
       </AudioProvider>
     </AuthProvider>
   );

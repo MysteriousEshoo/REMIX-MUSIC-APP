@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { supabase } from '../config/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { notifySongLike } from '../utils/notifications';
 
 /**
  * useLikeSong hook — Kisi bhi song ko like/unlike karne ke liye
@@ -107,6 +108,9 @@ export const useLikeSong = (songId: string) => {
           setIsLiked(previousLiked); // Revert optimistic update
         } else {
           console.log('[useLikeSong] ✅ Like SUCCESS — inserted:', data);
+          
+          // Send notification to song owner
+          await sendLikeNotification(songId, user.id);
         }
       }
     } catch (err) {
@@ -116,6 +120,29 @@ export const useLikeSong = (songId: string) => {
       setLoading(false);
     }
   }, [user, songId, isLiked]);
+
+  // Song owner ko notification bhejo
+  const sendLikeNotification = async (songId: string, likerUserId: string) => {
+    try {
+      // Get song details and owner
+      const { data: song } = await supabase
+        .from('songs')
+        .select('title, uploaded_by')
+        .eq('id', songId)
+        .single();
+
+      if (song && song.uploaded_by) {
+        await notifySongLike(
+          songId,
+          song.title,
+          likerUserId,
+          song.uploaded_by
+        );
+      }
+    } catch (err) {
+      console.log('[useLikeSong] Error sending like notification:', err);
+    }
+  };
 
   // Song ki total likes count nikalo
   const fetchLikeCount = useCallback(async () => {

@@ -8,6 +8,8 @@ import {
   FlatList,
   RefreshControl,
   Animated,
+  Alert,
+  Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,6 +20,7 @@ import { haptics } from '../../utils/haptics';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAudioContext } from '../../contexts/AudioContext';
+import { usePlaylists, Playlist } from '../../contexts/PlaylistContext';
 
 const MODE_STORAGE_KEY = '@remix_user_mode';
 
@@ -32,6 +35,7 @@ type CreatorTab = 'uploads' | 'playlists' | 'drafts';
 export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route }) => {
   const { user } = useAuth();
   const { setQueue, setCurrentMix } = useAudioContext();
+  const { playlists, loading: playlistsLoading, fetchPlaylists, deletePlaylist } = usePlaylists();
   const [isCreatorMode, setIsCreatorMode] = useState(false);
 
   // Listener tabs
@@ -76,6 +80,7 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
       } else {
         fetchLikedSongs();
       }
+      fetchPlaylists();
     });
     return unsubscribe;
   }, [navigation, user, isCreatorMode]);
@@ -87,6 +92,7 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
     } else {
       fetchLikedSongs();
     }
+    fetchPlaylists();
   }, [isCreatorMode]);
 
   // ========== LISTENER: Liked Songs ==========
@@ -227,17 +233,47 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
     navigation.navigate('Player', { mix });
   }, [isCreatorMode, myUploads, likedMixes, navigation, setQueue, setCurrentMix]);
 
+  // ========== PLAYLIST OPERATIONS ==========
+
+  const handleCreatePlaylist = useCallback(() => {
+    haptics.light();
+    navigation.navigate('Playlist', { isNewPlaylist: true });
+  }, [navigation]);
+
+  const handleOpenPlaylist = useCallback((playlist: Playlist) => {
+    haptics.light();
+    navigation.navigate('Playlist', { playlist });
+  }, [navigation]);
+
+  const handleDeletePlaylist = useCallback((playlist: Playlist) => {
+    Alert.alert(
+      'Delete Playlist',
+      `Are you sure you want to delete "${playlist.name}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await deletePlaylist(playlist.id);
+            haptics.success();
+          },
+        },
+      ]
+    );
+  }, [deletePlaylist]);
+
   // ========== Listener Tabs ==========
   const listenerTabs: { key: ListenerTab; label: string; icon: string; count: number }[] = [
     { key: 'liked', label: 'Liked', icon: 'heart', count: likedMixes.length },
-    { key: 'playlists', label: 'Playlists', icon: 'list', count: 0 },
+    { key: 'playlists', label: 'Playlists', icon: 'list', count: playlists.length },
     { key: 'downloads', label: 'Downloads', icon: 'download', count: downloadedMixes.length },
   ];
 
   // ========== Creator Tabs ==========
   const creatorTabs: { key: CreatorTab; label: string; icon: string; count: number }[] = [
     { key: 'uploads', label: 'My Uploads', icon: 'cloud-upload', count: myUploads.length },
-    { key: 'playlists', label: 'Playlists', icon: 'list', count: 0 },
+    { key: 'playlists', label: 'Playlists', icon: 'list', count: playlists.length },
     { key: 'drafts', label: 'Drafts', icon: 'document-text', count: 0 },
   ];
 
@@ -277,9 +313,15 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
     setRefreshing(true);
     haptics.light();
     if (isCreatorMode) {
-      fetchMyUploads().then(() => setRefreshing(false));
+      fetchMyUploads().then(() => {
+        fetchPlaylists();
+        setRefreshing(false);
+      });
     } else {
-      fetchLikedSongs().then(() => setRefreshing(false));
+      fetchLikedSongs().then(() => {
+        fetchPlaylists();
+        setRefreshing(false);
+      });
     }
   }, [isCreatorMode]);
 
@@ -289,6 +331,32 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
     if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
     return num.toString();
   };
+
+  // ========== PLAYLIST COMPONENT ==========
+  const PlaylistItem = ({ playlist }: { playlist: Playlist }) => (
+    <TouchableOpacity
+      style={styles.playlistCard}
+      onPress={() => handleOpenPlaylist(playlist)}
+      onLongPress={() => handleDeletePlaylist(playlist)}
+    >
+      <View style={styles.playlistImageContainer}>
+        <View style={styles.playlistImage}>
+          {playlist.cover_image ? (
+            <Image source={{ uri: playlist.cover_image }} style={styles.playlistCoverImage} />
+          ) : (
+            <Ionicons name="musical-notes" size={24} color={Colors.primary} />
+          )}
+        </View>
+      </View>
+      <View style={styles.playlistInfo}>
+        <Text style={styles.playlistName} numberOfLines={1}>{playlist.name}</Text>
+        <Text style={styles.playlistMeta}>
+          {playlist.song_count} {playlist.song_count === 1 ? 'song' : 'songs'}
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
+    </TouchableOpacity>
+  );
 
   // ========== LISTENER MODE RENDER ==========
   const renderListenerContent = () => (
@@ -342,13 +410,30 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
 
         {activeListenerTab === 'playlists' && (
           <View style={styles.content}>
-            <View style={styles.emptyContainer}>
-              <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
-              <Text style={styles.emptyTitle}>No playlists yet</Text>
-              <Text style={styles.emptyText}>
-                Create playlists to organize your favorite mixes
-              </Text>
-            </View>
+            {/* Create Playlist Button */}
+            <TouchableOpacity style={styles.createPlaylistButton} onPress={handleCreatePlaylist}>
+              <Ionicons name="add-circle-outline" size={24} color={Colors.primary} />
+              <Text style={styles.createPlaylistText}>Create New Playlist</Text>
+            </TouchableOpacity>
+
+            {playlistsLoading ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>Loading playlists...</Text>
+              </View>
+            ) : playlists.length > 0 ? (
+              playlists.map((playlist) => (
+                <PlaylistItem key={playlist.id} playlist={playlist} />
+              ))
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No playlists yet</Text>
+                <Text style={styles.emptyText}>
+                  Create playlists to organize your favorite mixes
+                </Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -467,13 +552,30 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({ navigation, route 
 
         {activeCreatorTab === 'playlists' && (
           <View style={styles.content}>
-            <View style={styles.emptyContainer}>
-              <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
-              <Text style={styles.emptyTitle}>No playlists yet</Text>
-              <Text style={styles.emptyText}>
-                Create playlists to organize your uploads
-              </Text>
-            </View>
+            {/* Create Playlist Button */}
+            <TouchableOpacity style={styles.createPlaylistButton} onPress={handleCreatePlaylist}>
+              <Ionicons name="add-circle-outline" size={24} color={Colors.primary} />
+              <Text style={styles.createPlaylistText}>Create New Playlist</Text>
+            </TouchableOpacity>
+
+            {playlistsLoading ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>Loading playlists...</Text>
+              </View>
+            ) : playlists.length > 0 ? (
+              playlists.map((playlist) => (
+                <PlaylistItem key={playlist.id} playlist={playlist} />
+              ))
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="list-outline" size={48} color={Colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No playlists yet</Text>
+                <Text style={styles.emptyText}>
+                  Create playlists to organize your uploads
+                </Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -690,6 +792,21 @@ const styles = StyleSheet.create({
     marginTop: Spacing.sm,
     textAlign: 'center',
   },
+  // Create Playlist Button
+  createPlaylistButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: Spacing.md,
+  },
+  createPlaylistText: {
+    ...Typography.body,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
   // Playlist
   playlistCard: {
     flexDirection: 'row',
@@ -706,8 +823,14 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.backgroundElevated,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  playlistCoverImage: {
+    width: '100%',
+    height: '100%',
   },
   playlistInfo: {
     flex: 1,
